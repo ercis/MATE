@@ -1,0 +1,7 @@
+# Pretrained CV4CDD models are large (~0.5 GB) and uploaded at runtime via the
+# module settings page (POST /api/v1/modules/cv4cdd/models). They are shared
+# across the whole platform but never committed – ignore everything in here
+# except this file and the .gitkeep that preserves the directory.
+*
+!.gitignore
+!.gitkeep

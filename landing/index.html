@@ -1,0 +1,487 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PM-MATE — A modular process mining platform</title>
+<meta name="description" content="PM-MATE is a modular process mining platform. Upload an event log, work with research-backed modules, and share your own methods with the community.">
+<link rel="icon" href="assets/pm-mate-icon-black.svg" type="image/svg+xml">
+<meta property="og:type" content="website">
+<meta property="og:title" content="PM-MATE - A modular process mining platform">
+<meta property="og:description" content="Upload an event log, work with research-backed modules, and share your own methods with the community.">
+<meta property="og:image" content="assets/shot-hero.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+  :root {
+    --bg: #fdfdfd;
+    --panel: #f7f7f9;
+    --ink: #17181c;
+    --ink-soft: #494c57;
+    --muted: #878b98;
+    --line: #e7e8ee;
+    --line-soft: #f0f1f5;
+    --black: #141414;
+    --lav: rgba(196, 181, 253, 0.55);
+    --rose: rgba(247, 200, 221, 0.6);
+    --sky: rgba(186, 210, 253, 0.45);
+    --sans: ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --maxw: 1180px;
+    --radius: 14px;
+    --card-shadow: 0 1px 2px rgba(23, 24, 28, 0.05), 0 8px 28px rgba(23, 24, 28, 0.06);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.65;
+    font-size: 16.5px;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+  a { color: var(--ink); text-decoration: none; }
+  a:hover { text-decoration: underline; text-underline-offset: 3px; }
+  code, pre { font-family: var(--mono); }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 28px; }
+  ::selection { background: rgba(196, 181, 253, 0.45); }
+
+  .label {
+    font-family: var(--mono); font-size: 11px; font-weight: 600;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted);
+  }
+
+  /* ---------- header ---------- */
+  header {
+    position: sticky; top: 0; z-index: 50;
+    background: rgba(253, 253, 253, 0.82);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .nav { display: flex; align-items: center; height: 60px; gap: 30px; }
+  .brand { display: flex; align-items: center; gap: 11px; font-weight: 650; font-size: 17px; letter-spacing: -0.015em; }
+  .brand img { width: 22px; height: 22px; }
+  .nav-links { display: flex; gap: 26px; margin-left: auto; font-size: 14.5px; font-weight: 500; align-items: center; }
+  .nav-links a { color: var(--ink-soft); }
+  .nav-links a:hover { color: var(--ink); text-decoration: none; }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+    padding: 11px 22px; font-size: 15px; font-weight: 600; border-radius: 10px;
+    border: 1px solid transparent;
+    transition: transform 140ms ease-out, box-shadow 140ms ease-out, background 140ms ease-out;
+  }
+  .btn:hover { text-decoration: none; transform: translateY(-1px); }
+  .btn-black { background: var(--black); color: #fff; }
+  .btn-black:hover { box-shadow: 0 6px 20px rgba(20, 20, 20, 0.25); }
+  .btn-ghost { border-color: var(--line); color: var(--ink); background: #fff; }
+  .btn-ghost:hover { box-shadow: 0 4px 14px rgba(23, 24, 28, 0.08); }
+  .nav .btn { padding: 8px 16px; font-size: 14px; }
+  .nav-links a.btn-black, .nav-links a.btn-black:hover { color: #fff; }
+
+  /* ---------- hero ---------- */
+  .hero { position: relative; padding: 92px 0 72px; text-align: center; overflow: hidden; }
+  .hero::before {
+    content: ""; position: absolute; inset: -20% -10%; pointer-events: none; z-index: 0;
+    background:
+      radial-gradient(ellipse 560px 420px at 24% 30%, var(--lav), transparent 68%),
+      radial-gradient(ellipse 620px 460px at 76% 26%, var(--rose), transparent 70%),
+      radial-gradient(ellipse 520px 420px at 55% 72%, var(--sky), transparent 70%);
+    filter: blur(46px);
+  }
+  .hero > .wrap { position: relative; z-index: 1; }
+  .hero-chip {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 13px; font-weight: 550; color: var(--ink-soft);
+    background: rgba(255, 255, 255, 0.75); border: 1px solid var(--line);
+    border-radius: 999px; padding: 6px 16px; margin-bottom: 26px;
+    box-shadow: 0 1px 4px rgba(23, 24, 28, 0.05);
+  }
+  .hero-chip .dot { width: 7px; height: 7px; border-radius: 50%; background: #a78bfa; }
+  h1 {
+    font-size: clamp(36px, 5vw, 58px);
+    line-height: 1.06; letter-spacing: -0.028em; font-weight: 700;
+    max-width: 17em; margin: 0 auto;
+  }
+  .hero p.sub { margin: 22px auto 0; font-size: 18px; color: var(--ink-soft); max-width: 38em; }
+  .cta-row { display: flex; gap: 12px; margin-top: 32px; flex-wrap: wrap; align-items: center; justify-content: center; }
+
+  .hero-shot {
+    position: relative; z-index: 1;
+    margin-top: 54px;
+    border: 1px solid var(--line); border-radius: var(--radius);
+    overflow: hidden; background: #fff;
+    box-shadow: 0 2px 6px rgba(23, 24, 28, 0.06), 0 24px 70px rgba(23, 24, 28, 0.13);
+  }
+  .hero-shot img { width: 100%; display: block; }
+  .hero-cap { position: relative; z-index: 1; margin-top: 14px; font-size: 13px; color: var(--muted); }
+
+  /* ---------- stats ---------- */
+  .stats-outer { border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); background: #fff; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); }
+  @media (max-width: 760px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+  .stat { padding: 34px 28px; border-left: 1px solid var(--line-soft); }
+  .stat:first-child { border-left: none; }
+  @media (max-width: 760px) {
+    .stat:nth-child(3) { border-left: none; }
+    .stat { border-top: 1px solid var(--line-soft); }
+    .stat:nth-child(-n+2) { border-top: none; }
+  }
+  .stat b { display: block; font-size: 40px; font-weight: 700; letter-spacing: -0.03em; line-height: 1.1; }
+  .stat span { display: block; margin-top: 6px; font-size: 13.5px; color: var(--muted); max-width: 22em; }
+
+  /* ---------- sections ---------- */
+  section { padding: 92px 0; }
+  .sec-head { max-width: 44em; margin: 0 auto 48px; text-align: center; }
+  .sec-head .label { display: inline-block; margin-bottom: 14px; }
+  h2 { font-size: clamp(28px, 3.4vw, 40px); letter-spacing: -0.025em; line-height: 1.12; font-weight: 700; }
+  .sec-head p { margin-top: 14px; color: var(--ink-soft); font-size: 17px; }
+
+  .reveal { opacity: 0; transform: translateY(14px); transition: opacity 0.5s ease-out, transform 0.5s ease-out; }
+  .reveal.on { opacity: 1; transform: none; }
+
+  /* props */
+  .props { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  @media (max-width: 880px) { .props { grid-template-columns: 1fr; } }
+  .prop {
+    background: #fff; border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 26px; box-shadow: var(--card-shadow);
+    transition: transform 140ms ease-out, box-shadow 140ms ease-out;
+  }
+  .prop:hover { transform: translateY(-2px); box-shadow: 0 2px 6px rgba(23,24,28,0.06), 0 14px 40px rgba(23,24,28,0.1); }
+  .prop .label { display: inline-block; margin-bottom: 12px; }
+  .prop h3 { font-size: 18.5px; letter-spacing: -0.015em; margin-bottom: 8px; font-weight: 650; }
+  .prop p { font-size: 14.5px; color: var(--ink-soft); }
+
+  /* ---------- theater ---------- */
+  .theater-outer { background: var(--panel); border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); }
+  .th-tabs {
+    display: flex; gap: 6px; margin: 0 auto 24px; padding: 5px;
+    background: #fff; border: 1px solid var(--line); border-radius: 12px;
+    width: max-content; max-width: 100%; overflow-x: auto;
+    box-shadow: 0 1px 3px rgba(23,24,28,0.04);
+  }
+  .th-tab {
+    border: none; background: transparent; border-radius: 8px;
+    padding: 9px 18px; cursor: pointer; white-space: nowrap;
+    font-family: var(--sans); font-weight: 600; font-size: 14px; color: var(--ink-soft);
+    display: inline-flex; gap: 8px; align-items: baseline;
+    transition: background 140ms ease-out, color 140ms ease-out;
+  }
+  .th-tab span { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+  .th-tab:hover { color: var(--ink); }
+  .th-tab.active { background: var(--black); color: #fff; }
+  .th-tab.active span { color: rgba(255, 255, 255, 0.6); }
+  .th-frame {
+    border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
+    background: #fff; box-shadow: var(--card-shadow);
+  }
+  .th-frame img { width: 100%; display: block; aspect-ratio: 24/17; object-fit: cover; object-position: top; transition: opacity 180ms ease-out; }
+  .th-cap { margin-top: 12px; font-size: 13px; color: var(--muted); text-align: center; }
+  .th-cap b { color: var(--ink-soft); font-weight: 600; }
+  .th-body { max-width: 46em; margin: 26px auto 0; text-align: center; }
+  .th-body h3 { font-size: 22px; letter-spacing: -0.018em; margin-bottom: 8px; font-weight: 650; }
+  .th-body p { font-size: 15.5px; color: var(--ink-soft); }
+
+  /* ---------- community ---------- */
+  .community { position: relative; overflow: hidden; }
+  .community::before {
+    content: ""; position: absolute; inset: -10%; pointer-events: none; z-index: 0;
+    background:
+      radial-gradient(ellipse 480px 380px at 15% 80%, var(--lav), transparent 70%),
+      radial-gradient(ellipse 520px 400px at 88% 25%, var(--rose), transparent 72%);
+    filter: blur(52px); opacity: 0.7;
+  }
+  .community > .wrap { position: relative; z-index: 1; }
+  .res-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  @media (max-width: 880px) { .res-grid { grid-template-columns: 1fr; } }
+
+  /* ---------- closing CTA ---------- */
+  .closing { position: relative; overflow: hidden; text-align: center; border-top: 1px solid var(--line-soft); }
+  .closing::before {
+    content: ""; position: absolute; inset: -30% -10%; pointer-events: none; z-index: 0;
+    background:
+      radial-gradient(ellipse 620px 420px at 30% 60%, var(--lav), transparent 68%),
+      radial-gradient(ellipse 620px 440px at 72% 45%, var(--rose), transparent 70%);
+    filter: blur(48px);
+  }
+  .closing > .wrap { position: relative; z-index: 1; }
+  .closing h2 { max-width: 16em; margin: 0 auto; }
+  .closing p { margin: 16px auto 0; color: var(--ink-soft); font-size: 17px; max-width: 34em; }
+
+  /* ---------- footer ---------- */
+  footer { border-top: 1px solid var(--line-soft); padding: 40px 0 52px; font-size: 14px; color: var(--muted); background: #fff; }
+  .foot-grid { display: flex; gap: 26px; flex-wrap: wrap; align-items: center; }
+  .foot-mark { font-weight: 650; font-size: 16.5px; color: var(--ink); display: flex; align-items: center; gap: 10px; }
+  .foot-mark img { width: 19px; height: 19px; }
+  .foot-links { margin-left: auto; display: flex; gap: 22px; }
+  .foot-links a { color: var(--muted); }
+  .foot-links a:hover { color: var(--ink); }
+  .colophon { margin-top: 12px; font-size: 12.5px; color: var(--muted); }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .reveal { opacity: 1; transform: none; transition: none; }
+    .btn, .prop, .th-tab { transition: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <a class="brand" href="#top">
+      <img src="assets/pm-mate-icon-black.svg" alt="">
+      PM-MATE
+    </a>
+    <nav class="nav-links">
+      <a href="#platform">Platform</a>
+      <a href="#community">Community</a>
+      <a href="https://github.com/ercis/MATE">GitHub</a>
+      <a class="btn btn-black" href="https://pm-mate.uni-muenster.de">Open PM-MATE</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- ================= HERO ================= -->
+  <div class="hero">
+    <div class="wrap">
+      <span class="hero-chip"><span class="dot"></span> A modular process mining platform</span>
+      <h1>Share your work with the process mining community.</h1>
+      <p class="sub">PM-MATE runs in the browser: analysts upload event logs and work with research-backed modules, researchers publish their methods as modules that anyone can run. One platform, both sides of the field.</p>
+      <div class="cta-row">
+        <a class="btn btn-black" href="https://pm-mate.uni-muenster.de">Open PM-MATE</a>
+        <a class="btn btn-ghost" href="https://github.com/ercis/MATE">View on GitHub</a>
+      </div>
+      <div class="hero-shot reveal">
+        <img src="assets/shot-hero.png" alt="The PM-MATE platform: a process overview with module library and the MATE AI assistant sidebar">
+      </div>
+      <p class="hero-cap">The platform: one process, its module library, and the MATE AI assistant.</p>
+    </div>
+  </div>
+
+  <!-- ================= STATS ================= -->
+  <div class="stats-outer">
+    <div class="wrap stats">
+      <div class="stat reveal"><b>12</b><span>analysis modules, seven of them implementing published research</span></div>
+      <div class="stat reveal"><b>3</b><span>event log formats: XES, CSV, and OCEL</span></div>
+      <div class="stat reveal"><b>5</b><span>process model notations, from directly-follows graphs to BPMN</span></div>
+      <div class="stat reveal"><b>0</b><span>restarts needed to install a new module</span></div>
+    </div>
+  </div>
+
+  <!-- ================= IDEA ================= -->
+  <section>
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <span class="label">The idea</span>
+        <h2>Research moves fast. Tooling should keep up.</h2>
+        <p>New process mining methods appear at every ICPM and BPM. Most remain prototype code in a paper's repository. PM-MATE gives them a runtime and an audience.</p>
+      </div>
+      <div class="props">
+        <div class="prop reveal">
+          <span class="label">Bridge</span>
+          <h3>Both sides of the field</h3>
+          <p>Analysts get a guided workflow from upload to insight. Method authors get a sandboxed runtime, typed SDKs, and a generated UI for their parameters.</p>
+        </div>
+        <div class="prop reveal">
+          <span class="label">Workspace</span>
+          <h3>One analysis platform</h3>
+          <p>Event data, models, and results live in one workspace. Import a log once, run any module on it, and compose the outputs into shared dashboards.</p>
+        </div>
+        <div class="prop reveal">
+          <span class="label">Modules</span>
+          <h3>Methods as plugins</h3>
+          <p>Upload a module archive and the platform unpacks it, resolves its dependencies, and registers it without a restart. Contributing takes a manifest and a handler class.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= PLATFORM THEATER ================= -->
+  <div class="theater-outer">
+  <section id="platform">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <span class="label">The platform</span>
+        <h2>From raw event log to defensible insight</h2>
+        <p>Import an event log, see how the process runs, and watch every long-running job stream its progress live.</p>
+      </div>
+
+      <div class="theater reveal">
+        <div class="th-tabs" role="tablist">
+          <button class="th-tab active" role="tab" data-i="0"><span>01</span>Workspace</button>
+          <button class="th-tab" role="tab" data-i="1"><span>02</span>Module library</button>
+          <button class="th-tab" role="tab" data-i="2"><span>03</span>Discovery</button>
+          <button class="th-tab" role="tab" data-i="3"><span>04</span>Dashboards</button>
+          <button class="th-tab" role="tab" data-i="4"><span>05</span>MATE AI</button>
+        </div>
+        <div class="th-frame"><img id="th-img" src="assets/shot-processes.png" alt="PM-MATE product view"></div>
+        <p class="th-cap"><b id="th-capb">The workspace.</b> <span id="th-cap">Four imported logs, one of them object-centric (OCEL).</span></p>
+        <div class="th-body">
+          <h3 id="th-title">One home for your event logs</h3>
+          <p id="th-desc">Drop XES, CSV, or OCEL files into the workspace and start mining. Guided column mapping and automatic normalization handle messy exports. Watched folders import new logs as they arrive.</p>
+        </div>
+      </div>
+
+    </div>
+  </section>
+  </div>
+
+  <!-- ================= COMMUNITY ================= -->
+  <section id="community" class="community">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <span class="label">Community</span>
+        <h2>Built a method? Share it as a module.</h2>
+        <p>A module is a folder: a manifest with metadata and academic sources, a handler class against a typed SDK, and an optional UI panel. The platform provides job scheduling, progress streaming, caching, dashboards, and isolation.</p>
+      </div>
+      <div class="res-grid">
+        <div class="prop reveal">
+          <span class="label">SDK</span>
+          <h3>A typed SDK on both ends</h3>
+          <p>Write the analysis against <code>mate.sdk</code> in Python and the optional panel against <code>@mate/module-sdk</code> in TypeScript. Every module gets its own virtual environment, resolved at install time.</p>
+        </div>
+        <div class="prop reveal">
+          <span class="label">Runtime</span>
+          <h3>Isolated where it counts</h3>
+          <p>Modules run in-process or as supervised subprocess workers in their own environment, with cooperative cancellation and live job logs. They talk to the platform through an event bus and typed capabilities.</p>
+        </div>
+        <div class="prop reveal">
+          <span class="label">Credit</span>
+          <h3>Your citation travels with the module</h3>
+          <p>The manifest carries your paper's citation and license, shown wherever the module appears. Users see whose method they are running.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= CLOSING CTA ================= -->
+  <section class="closing">
+    <div class="wrap">
+      <div class="reveal">
+        <h2>Bring your method to the community.</h2>
+        <p>PM-MATE runs online. Open the platform, import an event log, and see your process in minutes.</p>
+        <div class="cta-row">
+          <a class="btn btn-black" href="https://pm-mate.uni-muenster.de">Open PM-MATE</a>
+          <a class="btn btn-ghost" href="https://github.com/ercis/MATE">View on GitHub</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <span class="foot-mark">
+        <img src="assets/pm-mate-icon-black.svg" alt="">
+        PM-MATE
+      </span>
+      <nav class="foot-links">
+        <a href="https://pm-mate.uni-muenster.de">Open PM-MATE</a>
+        <a href="https://github.com/ercis/MATE">GitHub</a>
+        <a href="#platform">Platform</a>
+        <a href="#community">Community</a>
+      </nav>
+    </div>
+    <p class="colophon">Built at the University of Münster · © 2026 PM-MATE</p>
+  </div>
+</footer>
+
+<script>
+  /* Screenshots land in assets/ as they are captured - see landing/README.md.
+     Until one exists, show a labelled placeholder instead of a broken image. */
+  (function () {
+    function fallback(img) {
+      if (img.dataset.fellBack) return;
+      img.dataset.fellBack = '1';
+      img.src = 'assets/placeholder.svg';
+    }
+    document.querySelectorAll('.hero-shot img, .th-frame img').forEach(function (img) {
+      img.addEventListener('error', function () { fallback(img); });
+      if (img.complete && img.naturalWidth === 0) fallback(img);
+    });
+  })();
+
+  (function () {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      document.querySelectorAll('.reveal').forEach(function (el) { el.classList.add('on'); });
+      return;
+    }
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting) { e.target.classList.add('on'); io.unobserve(e.target); }
+      });
+    }, { rootMargin: '0px 0px -8% 0px', threshold: 0.08 });
+    document.querySelectorAll('.reveal').forEach(function (el) { io.observe(el); });
+  })();
+
+  /* product theater: tab-driven showcase */
+  (function () {
+    var STEPS = [
+      {
+        shot: 'assets/shot-processes.png', pos: 'top',
+        capb: 'The workspace.', cap: 'Four imported logs, one of them object-centric (OCEL).',
+        title: 'One home for your event logs',
+        desc: 'Drop XES, CSV, or OCEL files into the workspace and start mining. Guided column mapping and automatic normalization handle messy exports. Watched folders import new logs as they arrive.'
+      },
+      {
+        shot: 'assets/shot-modules.png', pos: 'top',
+        capb: 'The module library', cap: 'of one process, grouped into discovery, intelligence, and comparison.',
+        title: 'Analyses ship as modules',
+        desc: 'Every capability carries its own version, author, and academic source. Enable what you need, from classic discovery to agent-based simulation, or upload a module of your own.'
+      },
+      {
+        shot: 'assets/shot-discovery.png', pos: '50% 30%',
+        capb: 'An Inductive-miner Petri net', cap: 'of a loan process, one of five interchangeable notations.',
+        title: 'See how the process runs',
+        desc: 'Mine directly-follows graphs, Petri nets, process trees, heuristics nets, or BPMN diagrams from your log. Overlay timing, check conformance against a reference model, and drill into variants.'
+      },
+      {
+        shot: 'assets/shot-dashboard.png', pos: 'top',
+        capb: 'A template dashboard', cap: 'wired to a helpdesk log: KPIs, bottlenecks, throughput.',
+        title: 'Every module on one canvas',
+        desc: 'Drag KPIs, charts, and model views from any module onto a shared board. Complexity trends sit beside cycle times beside drift points, and the whole board is shareable with your team.'
+      },
+      {
+        shot: 'assets/shot-mate-ai.png', pos: 'top',
+        capb: 'MATE AI', cap: 'beside the process overview. Its context is built from module outputs, not from the event store.',
+        title: 'An assistant that reads results, not raw data',
+        desc: 'A context-aware assistant on every page: summarize a process, walk through a variant, find bottlenecks. Its prompt context is assembled from cached module outputs under a fixed budget, so raw event rows never leave your instance. Modules that do call an external model are flagged in the library.'
+      }
+    ];
+    var tabs = Array.prototype.slice.call(document.querySelectorAll('.th-tab'));
+    var img = document.getElementById('th-img');
+    if (!tabs.length || !img) return;
+    var capb = document.getElementById('th-capb');
+    var cap = document.getElementById('th-cap');
+    var title = document.getElementById('th-title');
+    var desc = document.getElementById('th-desc');
+    STEPS.forEach(function (s) { var pre = new Image(); pre.src = s.shot; });
+    function activate(idx) {
+      var s = STEPS[idx];
+      tabs.forEach(function (t, i) { t.classList.toggle('active', i === idx); t.setAttribute('aria-selected', i === idx ? 'true' : 'false'); });
+      img.style.opacity = '0';
+      setTimeout(function () {
+        delete img.dataset.fellBack;
+        img.src = s.shot;
+        img.style.objectPosition = s.pos;
+        capb.textContent = s.capb;
+        cap.textContent = s.cap;
+        title.textContent = s.title;
+        desc.textContent = s.desc;
+        img.style.opacity = '1';
+      }, 150);
+    }
+    tabs.forEach(function (t) {
+      t.addEventListener('click', function () { activate(Number(t.dataset.i)); });
+    });
+  })();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,148 @@
+services:
+  keycloak-db:
+    image: postgres:16-alpine
+    container_name: mate-keycloak-db
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-keycloak}
+    volumes:
+      - kc-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: mate-keycloak
+    command: ["start", "--import-realm"]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-keycloak}
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      # Browser-facing hostname; the issuer claim is built from this. We use
+      # the docker DNS name `keycloak` so a single issuer string works from
+      # both the browser and the containers. This requires `127.0.0.1 keycloak`
+      # in the host's /etc/hosts so the browser can resolve it too.
+      KC_HOSTNAME: keycloak
+      KC_HOSTNAME_PORT: "8080"
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_BACKCHANNEL: "false"
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./infra/keycloak/realm-export:/opt/keycloak/data/import:ro
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          exec 3<>/dev/tcp/localhost/9000 && printf 'GET /health/ready HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3 && grep -q '"status": "UP"' <&3
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: mate-api
+    volumes:
+      # Persistent state. Back up by copying ./data.
+      - ./data:/app/data
+      # Module folder is the platform's extension point – exposed read/write so
+      # the install flow can write modules/<id>/ into the host filesystem.
+      - ./modules:/app/modules
+      # The CV4CDD model (Temporal Dynamics module) is uploaded at runtime into
+      # modules/cv4cdd/model/, which the ./modules mount above already exposes at
+      # /app/modules/cv4cdd/model – no separate, host-specific mount needed. Set
+      # the module's model_path to /app/modules/cv4cdd/model/<model-dir>.
+    environment:
+      DATA_DIR: /app/data
+      MODULES_DIR: /app/modules
+      DATABASE_URL: sqlite+aiosqlite:////app/data/metadata.db
+      LOG_LEVEL: info
+      # Usage-tracking default/policy: force | on | off. `force` keeps tracking
+      # on for everyone and hides the privacy step + Settings → Privacy tab.
+      USER_TRACKING_ONBOARDING: ${USER_TRACKING_ONBOARDING:-force}
+      # Allow the web container's browser-side origin (the host's port 3000).
+      CORS_ORIGINS: '["http://localhost:3000"]'
+      # Persist uv-managed Python runtimes to the data volume so they survive
+      # container rebuilds and don't need to be re-downloaded on every start.
+      UV_PYTHON_INSTALL_DIR: /app/data/uv-python
+      # Keycloak: API validates `iss` against the browser-facing URL.
+      # JWKS is fetched over the docker DNS name; the issuer string is what
+      # tokens claim. With KC_HOSTNAME_STRICT_BACKCHANNEL=false this works.
+      KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER:-http://localhost:8080/realms/flows-funds}
+      KEYCLOAK_JWKS_URL: ${KEYCLOAK_JWKS_URL:-http://keycloak:8080/realms/flows-funds/protocol/openid-connect/certs}
+      KEYCLOAK_AUDIENCE: ${KEYCLOAK_AUDIENCE:-flows-funds-api}
+    ports:
+      - "8000:8000"
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      # First boot installs every module's Python deps before the HTTP server
+      # comes up – cv4cdd alone pulls TensorFlow (~500 MB). Subsequent boots
+      # reuse the wheels in /app/data/uv-python and start in seconds, but the
+      # initial grace period needs to cover the worst case.
+      start_period: 600s
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        # NEXT_PUBLIC_* envs are inlined at build time (the rationale lives in
+        # apps/web/lib/api.ts). Set this to the URL the *browser* will use to
+        # reach the api – for local docker-compose that's the host's port 8000.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    container_name: mate-web
+    volumes:
+      # Same modules/ bind-mount as the api container so the entrypoint can
+      # esbuild each module's panel into modules/<id>/.dist/ at container
+      # start – the API serves those bundles at /api/v1/modules/{id}/assets/.
+      - ./modules:/app/modules
+    environment:
+      INTERNAL_API_URL: http://api:8000
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      # Auth.js v5 – encrypts the session cookie. Rotate per environment.
+      AUTH_SECRET: ${AUTH_SECRET:-dev-only-change-me-with-openssl-rand-base64-32}
+      AUTH_URL: ${AUTH_URL:-http://localhost:3000}
+      AUTH_TRUST_HOST: "true"
+      # Keycloak (server-side; never exposed to the browser).
+      KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER:-http://localhost:8080/realms/flows-funds}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-flows-funds-web}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-flows-funds-web-dev-secret}
+      # Set to a brokered IdP alias (e.g. "keycloak-oidc") to skip Keycloak's
+      # login page and redirect straight to that IdP. Empty = show the local form.
+      KEYCLOAK_IDP_HINT: ${KEYCLOAK_IDP_HINT:-}
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  kc-data:

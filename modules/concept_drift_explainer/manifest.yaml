@@ -1,0 +1,145 @@
+id: concept_drift_explainer
+name: Concept Drift Explainer
+version: 0.1.0
+category: advanced
+description: >-
+  Explains why your process changed. It takes the drift points found by CV4CDD,
+  searches your uploaded company documents for context, and returns ranked,
+  citation-backed causes. Sends data to an external LLM, so it is not safe for
+  confidential logs.
+keywords: ["explain drift", "drift explanation", "why drift", "drift reason", "root cause drift", "drift cause"]
+author: J. Schaffner
+license: MIT
+default_enabled: true
+# Sends event-log excerpts and uploaded documents to an external LLM – not
+# safe for confidential data.
+isConfidentialSafe: false
+
+requirements:
+  event_log:
+    # Case-centric: runs on a classic event log (one case per trace). Never
+    # appears for object-centric (OCEL) logs.
+    log_model: case_centric
+    required_columns: [case_id, activity, timestamp]
+    min_events: 200
+    min_cases: 20
+  modules: [cv4cdd]
+
+provides:
+  - concept_drift_explainer.explanations
+
+consumes:
+  - cv4cdd.completed
+
+dependencies:
+  python:
+    requires-python: ">=3.12"
+    packages:
+      - "langgraph>=0.5,<0.7"
+      - "langchain-core>=0.3"
+      - "langchain-openai>=0.3"
+      - "langchain-text-splitters>=0.3"
+      - "openai>=1.40"
+      - "pinecone>=7.0"
+      - "tiktoken>=0.9"
+      - "pypdf>=5.0"
+      - "python-docx>=1.2"
+      - "python-pptx>=1.0"
+      - "nltk>=3.9"
+      - "Pillow>=10.0"
+    inherit:
+      - pandas
+      - pm4py
+      - numpy
+      - duckdb
+    isolation: in_process
+
+frontend:
+  panel: ./panel/index.tsx
+  widgets:
+    - id: drift-overview
+      entry: ./widgets/DriftOverview.tsx
+      title: Concept drifts
+      description: Detected drifts with confidence and affected window range.
+      icon: Waves
+      default_w: 5
+      default_h: 8
+      min_w: 5
+      min_h: 6
+      config_schema:
+        properties:
+          min_confidence:
+            type: number
+            title: Min confidence
+            description: Hide drifts below this confidence (0–1).
+            minimum: 0
+            maximum: 1
+            step: 0.05
+            default: 0
+            ui:
+              widget: slider
+
+permissions:
+  - read:event_log
+  - write:module_results
+
+ai_models:
+  # This module keeps its AI config fully isolated from the platform's global
+  # Settings → AI. It owns its own OpenAI API key (stored under
+  # ``config_json["ai"]``) and only talks to OpenAI. ``self_hosted`` tells the
+  # settings page to render the module's own OpenAI card (key + Check + model
+  # pickers) instead of the platform-keyed provider/model selectors.
+  self_hosted: true
+  llm:
+    title: Agent model
+    description: >-
+      Used by every LangGraph agent in the pipeline (drift summary, re-ranker,
+      Franzoi mapper, explanation, chatbot, and image / pptx vision). Pick an
+      OpenAI chat model after checking your key.
+  embedding:
+    title: Embedding model
+    description: >-
+      Used to embed uploaded documents and drift phrases for retrieval. Pick an
+      OpenAI embedding model (e.g. text-embedding-3-small) and, optionally, an
+      output dimension.
+
+config_schema:
+  properties:
+    pinecone_api_key:
+      type: string
+      title: Pinecone API key
+      description: >-
+        Created at pinecone.io. Stored encrypted in the platform settings.
+        Required to ingest documents and retrieve evidence.
+      ui:
+        widget: secret
+        affects: compute
+    pinecone_index_name:
+      type: string
+      title: Pinecone index name
+      description: >-
+        The Pinecone index that holds the document embeddings. Will be created
+        on first ingest if it does not exist (serverless, aws/us-east-1).
+      default: conceptdriftexplainer
+      ui:
+        widget: text
+        affects: compute
+    max_causes:
+      type: integer
+      title: Maximum ranked causes
+      description: Upper bound on the number of ranked causes returned for each drift.
+      minimum: 1
+      maximum: 10
+      default: 3
+      ui:
+        widget: number
+    confidence_threshold:
+      type: number
+      title: Cause confidence threshold
+      description: Causes with calibrated confidence below this value are filtered out.
+      minimum: 0.0
+      maximum: 1.0
+      step: 0.05
+      default: 0.25
+      ui:
+        widget: slider

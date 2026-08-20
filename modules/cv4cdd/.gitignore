@@ -1,0 +1,13 @@
+.venv/
+.dist/
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+poetry.lock
+poetry-installer-*.log
+
+# Upstream CV4CDD repo artifacts we don't ship as part of the module
+output/
+data/
+logs/

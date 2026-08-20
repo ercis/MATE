@@ -1,0 +1,30 @@
+# Workspace-wide Docker build excludes.
+
+# Per-package node_modules – pnpm installs them inside the build image.
+node_modules
+**/node_modules
+
+# Per-module build artefacts – the platform recreates them at runtime.
+modules/*/.venv
+modules/*/.dist
+modules/*/.installed-hash
+modules/*/uv.lock
+
+# Python venv + cache.
+.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+
+# Local data – bind-mounted at runtime, never baked in.
+data
+
+# Build / IDE / VCS noise.
+.git
+.next
+.tsbuildinfo
+**/*.tsbuildinfo
+.vscode
+.idea
+*.log

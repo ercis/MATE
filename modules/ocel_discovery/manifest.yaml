@@ -1,0 +1,90 @@
+id: ocel_discovery
+name: Object-Centric Discovery
+version: 1.0.0
+category: foundation
+description: >-
+  Discovers a process from object-centric (OCEL) logs, showing the object types,
+  the activities, and the object-centric directly-follows graph (OC-DFG).
+keywords: ["object-centric", "object centric", "ocel", "oc-dfg", "object types", "ocpm"]
+author: FlowFactory
+license: MIT
+default_enabled: true
+# Runs entirely locally – safe to use against confidential event logs.
+isConfidentialSafe: true
+
+requirements:
+  event_log:
+    # THE gate: this module only runs against object-centric (OCEL) logs. It
+    # never appears for case-centric logs, and the case-centric modules never
+    # appear for OCEL logs.
+    log_model: object_centric
+    min_events: 1
+
+provides:
+  - ocel_discovery.ocdfg
+  - ocel_discovery.ocpn
+  - ocel_discovery.summary
+  - ocel_discovery.objects_graph
+  - ocel_discovery.activity_object_types
+  - ocel_discovery.objects_summary
+
+consumes:
+  - ocel.imported
+
+dependencies:
+  python:
+    requires-python: ">=3.12"
+    packages: []
+    inherit:
+      - pm4py
+      - pandas
+      - duckdb
+    isolation: in_process
+
+frontend:
+  panel: ./panel/index.tsx
+  widgets:
+    - id: object-type-summary
+      entry: ./widgets/ObjectTypeSummary.tsx
+      title: Object types
+      description: Object types and per-type counts of the OCEL log.
+      icon: Layers
+      default_w: 7
+      default_h: 8
+      min_w: 6
+      min_h: 7
+      log_models: [object_centric]
+    - id: ocdfg
+      entry: ./widgets/Ocdfg.tsx
+      title: Object-centric DFG
+      description: Directly-follows graph per object type (OC-DFG).
+      icon: Network
+      default_w: 6
+      default_h: 10
+      min_w: 5
+      min_h: 8
+      log_models: [object_centric]
+    - id: activity-object-types
+      entry: ./widgets/ActivityObjectTypes.tsx
+      title: Activity / object-type matrix
+      description: How often each activity touches each object type.
+      icon: Table2
+      default_w: 6
+      default_h: 6
+      min_w: 5
+      min_h: 5
+      log_models: [object_centric]
+    - id: object-lifecycle
+      entry: ./widgets/ObjectLifecycle.tsx
+      title: Object lifecycles
+      description: Per-object-type median lifecycle duration and event counts.
+      icon: Timer
+      default_w: 5
+      default_h: 6
+      min_w: 5
+      min_h: 5
+      log_models: [object_centric]
+
+permissions:
+  - read:event_log
+  - write:module_results

@@ -1,0 +1,107 @@
+{
+  "ocel:global-event": {
+    "ocel:activity": "__INVALID__"
+  },
+  "ocel:global-object": {
+    "ocel:type": "__INVALID__"
+  },
+  "ocel:global-log": {
+    "ocel:object-types": [
+      "order",
+      "item",
+      "customer"
+    ],
+    "ocel:attribute-names": [],
+    "ocel:version": "1.0",
+    "ocel:ordering": "timestamp"
+  },
+  "ocel:events": {
+    "e1": {
+      "ocel:activity": "create order",
+      "ocel:timestamp": "2024-01-01T00:00:00Z",
+      "ocel:vmap": {},
+      "ocel:omap": [
+        "o1",
+        "c1"
+      ],
+      "ocel:typedOmap": [
+        {
+          "ocel:oid": "o1",
+          "ocel:qualifier": ""
+        },
+        {
+          "ocel:oid": "c1",
+          "ocel:qualifier": ""
+        }
+      ]
+    },
+    "e2": {
+      "ocel:activity": "add item",
+      "ocel:timestamp": "2024-01-02T00:00:00Z",
+      "ocel:vmap": {},
+      "ocel:omap": [
+        "i1"
+      ],
+      "ocel:typedOmap": [
+        {
+          "ocel:oid": "i1",
+          "ocel:qualifier": ""
+        }
+      ]
+    },
+    "e3": {
+      "ocel:activity": "pay",
+      "ocel:timestamp": "2024-01-03T00:00:00Z",
+      "ocel:vmap": {},
+      "ocel:omap": [
+        "o1"
+      ],
+      "ocel:typedOmap": [
+        {
+          "ocel:oid": "o1",
+          "ocel:qualifier": ""
+        }
+      ]
+    },
+    "e4": {
+      "ocel:activity": "ship",
+      "ocel:timestamp": "2024-01-04T00:00:00Z",
+      "ocel:vmap": {},
+      "ocel:omap": [
+        "o1"
+      ],
+      "ocel:typedOmap": [
+        {
+          "ocel:oid": "o1",
+          "ocel:qualifier": ""
+        }
+      ]
+    }
+  },
+  "ocel:objects": {
+    "o1": {
+      "ocel:type": "order",
+      "ocel:ovmap": {}
+    },
+    "i1": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    },
+    "c1": {
+      "ocel:type": "customer",
+      "ocel:ovmap": {}
+    }
+  },
+  "ocel:eventTypes": {
+    "add item": {},
+    "create order": {},
+    "pay": {},
+    "ship": {}
+  },
+  "ocel:objectTypes": {
+    "customer": {},
+    "item": {},
+    "order": {}
+  },
+  "ocel:objectChanges": []
+}

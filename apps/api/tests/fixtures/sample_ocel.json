@@ -1,0 +1,98 @@
+{
+  "objectTypes": [
+    {
+      "name": "customer",
+      "attributes": []
+    },
+    {
+      "name": "item",
+      "attributes": []
+    },
+    {
+      "name": "order",
+      "attributes": []
+    }
+  ],
+  "eventTypes": [
+    {
+      "name": "add item",
+      "attributes": []
+    },
+    {
+      "name": "create order",
+      "attributes": []
+    },
+    {
+      "name": "pay",
+      "attributes": []
+    },
+    {
+      "name": "ship",
+      "attributes": []
+    }
+  ],
+  "objects": [
+    {
+      "id": "o1",
+      "type": "order"
+    },
+    {
+      "id": "i1",
+      "type": "item"
+    },
+    {
+      "id": "c1",
+      "type": "customer"
+    }
+  ],
+  "events": [
+    {
+      "id": "e1",
+      "type": "create order",
+      "time": "2024-01-01T00:00:00Z",
+      "relationships": [
+        {
+          "objectId": "o1",
+          "qualifier": ""
+        },
+        {
+          "objectId": "c1",
+          "qualifier": ""
+        }
+      ]
+    },
+    {
+      "id": "e2",
+      "type": "add item",
+      "time": "2024-01-02T00:00:00Z",
+      "relationships": [
+        {
+          "objectId": "i1",
+          "qualifier": ""
+        }
+      ]
+    },
+    {
+      "id": "e3",
+      "type": "pay",
+      "time": "2024-01-03T00:00:00Z",
+      "relationships": [
+        {
+          "objectId": "o1",
+          "qualifier": ""
+        }
+      ]
+    },
+    {
+      "id": "e4",
+      "type": "ship",
+      "time": "2024-01-04T00:00:00Z",
+      "relationships": [
+        {
+          "objectId": "o1",
+          "qualifier": ""
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mate-sdk"
+version = "0.2.0"
+description = "Module SDK for Mate – public API for module authors."
+requires-python = ">=3.12"
+readme = "README.md"
+license = { text = "MIT" }
+dependencies = [
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+    "structlog>=24.1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mate"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/mate"]

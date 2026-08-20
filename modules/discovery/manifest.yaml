@@ -1,0 +1,133 @@
+id: discovery
+name: Discovery
+version: 1.0.0
+category: foundation
+description: >-
+  Turns your event log into a process model and shows it as a directly-follows
+  graph, Petri net (Alpha or Inductive miner), process tree, heuristics net, or
+  BPMN diagram.
+keywords: ["process model", "discover", "discovery", "dfg", "petri net", "bpmn", "process tree", "model", "variants", "paths"]
+author: van der Aalst
+license: MIT
+default_enabled: true
+# Runs entirely locally – safe to use against confidential event logs.
+isConfidentialSafe: true
+
+requirements:
+  event_log:
+    # Case-centric: runs on a classic event log (one case per trace). Never
+    # appears for object-centric (OCEL) logs.
+    log_model: case_centric
+    required_columns:
+      - case_id
+      - activity
+      - timestamp
+    min_events: 50
+    min_cases: 2
+
+provides:
+  - discovery.dfg
+  - discovery.petri_net.alpha
+  - discovery.petri_net.inductive
+  - discovery.process_tree
+  - discovery.heuristics_net
+  - discovery.bpmn
+
+consumes:
+  - log.imported
+
+dependencies:
+  python:
+    requires-python: ">=3.12"
+    packages: []
+    inherit:
+      - pm4py
+      - pandas
+      - duckdb
+    isolation: in_process
+
+frontend:
+  panel: ./panel/index.tsx
+  widgets:
+    - id: process-overview
+      entry: ./widgets/ProcessOverview.tsx
+      title: Process overview
+      description: Activity, connection and start/end counts of the discovered map.
+      icon: Workflow
+      # Fixed-size summary scorecard (4 counts): locked to a size that shows them all.
+      default_w: 7
+      default_h: 8
+      resizable: false
+    - id: activity-frequency
+      entry: ./widgets/ActivityFrequency.tsx
+      title: Activity frequency
+      description: Most frequent activities in the discovered process.
+      icon: BarChart3
+      default_w: 6
+      default_h: 9
+      min_w: 5
+      min_h: 6
+      config_schema:
+        properties:
+          top_n:
+            type: integer
+            title: Activities shown
+            description: How many most-frequent activities to plot.
+            minimum: 3
+            maximum: 25
+            step: 1
+            default: 10
+            ui:
+              widget: slider
+    - id: process-map
+      entry: ./widgets/ProcessMap.tsx
+      title: Process map
+      description: Directly-follows graph of the dashboard-filtered event log.
+      icon: Network
+      default_w: 8
+      default_h: 12
+      min_w: 6
+      min_h: 10
+
+permissions:
+  - read:event_log
+  - write:module_results
+
+config_schema:
+  properties:
+    heuristics_dependency_threshold:
+      type: number
+      title: Dependency threshold
+      description: Minimum |a→b| / (|a→b| + |b→a|) for an arc to be kept by the Heuristics miner.
+      minimum: 0
+      maximum: 1
+      step: 0.05
+      default: 0.5
+      ui:
+        widget: slider
+        group: viz
+        affects: compute
+    heuristics_and_threshold:
+      type: number
+      title: AND threshold
+      description: Threshold above which two outgoing arcs from the same activity are treated as concurrent.
+      minimum: 0
+      maximum: 1
+      step: 0.05
+      default: 0.65
+      ui:
+        widget: slider
+        group: viz
+        affects: compute
+    heuristics_loop_two_threshold:
+      type: number
+      title: Loop-two threshold
+      description: Threshold for detecting length-2 loops (a→b→a).
+      minimum: 0
+      maximum: 1
+      step: 0.05
+      default: 0.5
+      ui:
+        widget: slider
+        group: viz
+        affects: compute

@@ -1,0 +1,13 @@
+{
+  "events": [
+    {"case_id": "case-1", "activity": "register order", "timestamp": "2026-01-01T08:00:00+00:00", "resource": "alice"},
+    {"case_id": "case-1", "activity": "check stock", "timestamp": "2026-01-01T09:00:00+00:00", "resource": "bob"},
+    {"case_id": "case-1", "activity": "ship", "timestamp": "2026-01-01T11:30:00+00:00", "resource": "alice"},
+    {"case_id": "case-2", "activity": "register order", "timestamp": "2026-01-01T08:30:00+00:00", "resource": "alice"},
+    {"case_id": "case-2", "activity": "check stock", "timestamp": "2026-01-01T10:15:00+00:00", "resource": "bob"},
+    {"case_id": "case-2", "activity": "cancel", "timestamp": "2026-01-01T10:45:00+00:00", "resource": "bob"},
+    {"case_id": "case-3", "activity": "register order", "timestamp": "2026-01-02T09:00:00+00:00", "resource": "carol"},
+    {"case_id": "case-3", "activity": "check stock", "timestamp": "2026-01-02T09:45:00+00:00", "resource": "bob"},
+    {"case_id": "case-3", "activity": "ship", "timestamp": "2026-01-02T12:00:00+00:00", "resource": "alice"}
+  ]
+}

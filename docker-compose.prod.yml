@@ -1,0 +1,125 @@
+# Production overlay for the uni VM (pm-mate.uni-muenster.de).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# It does four things on top of the base compose file:
+#   1. Adds the `proxy` (Caddy) container that terminates TLS on :443 and
+#      routes one origin to web/api/keycloak by path.
+#   2. Stops publishing 3000/8000/8080 publicly – they're reached only through
+#      the proxy on the internal compose network.
+#   3. Repoints every browser-facing URL at https://pm-mate.uni-muenster.de
+#      (single same-origin) and moves Keycloak under /auth.
+#   4. Drops the macOS-only cv4cdd model bind mount from the base file.
+#
+# Secrets (AUTH_SECRET, KEYCLOAK_CLIENT_SECRET, KEYCLOAK_DB_PASSWORD,
+# KEYCLOAK_ADMIN_PASSWORD) stay in .env – see DEPLOY.md §4.
+
+services:
+  proxy:
+    image: caddy:2-alpine
+    container_name: mate-proxy
+    restart: unless-stopped
+    # Resolve the public hostname to this Caddy container on the internal
+    # network, so the web container's server-side OIDC calls reach Keycloak
+    # on-box (via Caddy) instead of hairpinning through the uni proxy.
+    networks:
+      default:
+        aliases:
+          - pm-mate.uni-muenster.de
+    ports:
+      - "443:443"
+    environment:
+      # Let's Encrypt live dir for the VM's own cert, e.g.
+      # /etc/letsencrypt/live/<vm-hostname>. Set in .env on the VM - kept out
+      # of the repo, which is public. Caddy reads it as {$TLS_CERT_DIR}.
+      TLS_CERT_DIR: ${TLS_CERT_DIR:?set TLS_CERT_DIR in .env - see DEPLOY.md}
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Mount the whole letsencrypt dir, not just live/: live/ is symlinks
+      # into archive/, so a narrower mount breaks the cert chain.
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      web:
+        condition: service_started
+      api:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+
+  web:
+    build:
+      args:
+        # Inlined into the client bundle at build time – the browser hits the
+        # API same-origin through the proxy. Changing this needs a rebuild.
+        NEXT_PUBLIC_API_URL: https://pm-mate.uni-muenster.de
+    environment:
+      NEXT_PUBLIC_API_URL: https://pm-mate.uni-muenster.de
+      AUTH_URL: https://pm-mate.uni-muenster.de
+      KEYCLOAK_ISSUER: https://pm-mate.uni-muenster.de/auth/realms/flows-funds
+      # Redirect every login straight to the university IdP (no Keycloak form).
+      # Value is the IdP *alias* – must equal the segment in the registered
+      # broker redirect URI (.../broker/keycloak-oidc/endpoint). See
+      # infra/keycloak/configure-university-idp.sh.
+      KEYCLOAK_IDP_HINT: ${KEYCLOAK_IDP_HINT:-keycloak-oidc}
+      # Server-side OIDC calls (esp. the code→token POST) must NOT hairpin out
+      # through the uni proxy – that retried the POST and invalidated the
+      # single-use code ("Code not valid"). The proxy service carries a docker
+      # network alias for the public hostname (see below), so these calls
+      # resolve to our Caddy on the internal network instead. Caddy serves the
+      # VM cert (name mismatch for pm-mate) → skip verify on this hop.
+      NODE_TLS_REJECT_UNAUTHORIZED: "0"
+      # Sessions are client-side cookie JWE (Auth.js default): SESSION_STORE_DIR is
+      # intentionally unset. The full access+refresh cookie (chunked if >4KB) now
+      # fits the uni edge proxy's enlarged header buffer, so the on-disk store
+      # (Option 3, the 502 workaround) is no longer needed. To revert, restore
+      # SESSION_STORE_DIR + the ./data/web-sessions volume.
+    ports: !reset []
+
+  api:
+    environment:
+      CORS_ORIGINS: '["https://pm-mate.uni-muenster.de"]'
+      KEYCLOAK_ISSUER: https://pm-mate.uni-muenster.de/auth/realms/flows-funds
+      # Internal (container -> container) fetch of the signing keys. Note the
+      # /auth prefix – it must match KC_HTTP_RELATIVE_PATH or every token fails.
+      KEYCLOAK_JWKS_URL: http://keycloak:8080/auth/realms/flows-funds/protocol/openid-connect/certs
+    # Stated explicitly for the VM. The CV4CDD model is uploaded at runtime into
+    # modules/cv4cdd/model/ (covered by the ./modules mount). Only add a separate
+    # host mount here if you keep the model outside the repo, e.g.
+    #   - /srv/flows-funds/cv4cdd_model:/srv/flows-funds/cv4cdd_model:ro
+    volumes: !override
+      - ./data:/app/data
+      - ./modules:/app/modules
+    ports: !reset []
+
+  keycloak:
+    # Debian-based rebuild of the same Keycloak 26.0 – runs on CPUs without
+    # x86-64-v2 (the official UBI9 image fatally aborts there). See
+    # infra/keycloak/Dockerfile. Remove this block once the VM's CPU model
+    # exposes x86-64-v2 (host-passthrough) to go back to the upstream image.
+    image: mate-keycloak:26-debian
+    build:
+      context: .
+      dockerfile: infra/keycloak/Dockerfile
+    environment:
+      # The issuer is derived purely from KC_HOSTNAME (hostname v2 does NOT
+      # prepend the relative path), so the /auth path must live here too –
+      # issuer becomes https://pm-mate.uni-muenster.de/auth/realms/flows-funds,
+      # matching KEYCLOAK_ISSUER on web/api.
+      KC_HOSTNAME: https://pm-mate.uni-muenster.de/auth
+      # Serve the endpoints under /auth so Caddy's /auth/* route hits them.
+      KC_HTTP_RELATIVE_PATH: /auth
+      # Keep the management endpoints (port 9000: /health, /metrics) at root so
+      # the base healthcheck's `/health/ready` keeps working – otherwise the
+      # /auth relative path would move them and Keycloak would read as unhealthy.
+      KC_HTTP_MANAGEMENT_RELATIVE_PATH: /
+      # A full-URL KC_HOSTNAME carries its own scheme/port, so hostname-port
+      # must NOT be set (Keycloak rejects an empty/conflicting value and exits).
+      # Drop the base file's "8080" entirely from the merged config.
+      KC_HOSTNAME_PORT: !reset null
+    ports: !reset []
+
+volumes:
+  caddy-data:
+  caddy-config:

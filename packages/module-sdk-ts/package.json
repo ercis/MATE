@@ -1,0 +1,8 @@
+{
+  "name": "@mate/module-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TypeScript SDK for module frontends – placeholder; full surface lands when modules ship UI.",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts"
+}

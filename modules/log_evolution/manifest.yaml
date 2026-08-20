@@ -1,0 +1,142 @@
+id: log_evolution
+name: Log evolution
+version: 1.0.0
+category: advanced
+description: >-
+  Shows how your log grows and shifts over time: case arrivals versus
+  completions, work in progress, the changing activity mix, and a dotted chart
+  of every event. Makes growth, backlogs, seasonality, and drift easy to spot.
+keywords: ["log evolution", "over time", "case arrivals", "work in progress", "wip", "dotted chart", "backlog", "seasonality"]
+author: FlowFactory
+license: MIT
+default_enabled: true
+# Runs entirely locally – safe to use against confidential event logs.
+isConfidentialSafe: true
+
+requirements:
+  event_log:
+    # Case-centric: runs on a classic event log (one case per trace). Never
+    # appears for object-centric (OCEL) logs.
+    log_model: case_centric
+    required_columns:
+      - case_id
+      - activity
+      - timestamp
+    optional_columns:
+      - end_timestamp
+    min_events: 50
+    min_cases: 2
+
+provides:
+  - log_evolution.timeseries
+
+consumes:
+  - log.imported
+
+dependencies:
+  python:
+    requires-python: ">=3.12"
+    packages: []
+    inherit:
+      - pandas
+    isolation: in_process
+
+frontend:
+  panel: ./panel/index.tsx
+  widgets:
+    - id: arrivals-completions
+      entry: ./widgets/ArrivalsCompletions.tsx
+      title: Arrivals & completions
+      description: Cases started vs. completed per period - growth, backlog and seasonality.
+      icon: TrendingUp
+      default_w: 8
+      default_h: 7
+      min_w: 6
+      min_h: 7
+      config_schema:
+        properties:
+          granularity:
+            type: string
+            title: Granularity
+            description: Calendar period each point aggregates.
+            default: auto
+            enum: [auto, daily, weekly, monthly, quarterly, yearly]
+            enumLabels: [Auto, Daily, Weekly, Monthly, Quarterly, Yearly]
+            ui:
+              widget: select
+
+    - id: active-cases
+      entry: ./widgets/ActiveCases.tsx
+      title: Active cases (WIP)
+      description: Open cases (started but not finished) at the end of each period.
+      icon: Activity
+      default_w: 6
+      default_h: 7
+      min_w: 5
+      min_h: 7
+      config_schema:
+        properties:
+          granularity:
+            type: string
+            title: Granularity
+            default: auto
+            enum: [auto, daily, weekly, monthly, quarterly, yearly]
+            enumLabels: [Auto, Daily, Weekly, Monthly, Quarterly, Yearly]
+            ui:
+              widget: select
+
+    - id: activity-mix
+      entry: ./widgets/ActivityMix.tsx
+      title: Activity mix over time
+      description: Stacked event volume per activity per period - which activities dominate when.
+      icon: Layers
+      default_w: 8
+      default_h: 7
+      min_w: 6
+      min_h: 7
+      config_schema:
+        properties:
+          granularity:
+            type: string
+            title: Granularity
+            default: auto
+            enum: [auto, daily, weekly, monthly, quarterly, yearly]
+            enumLabels: [Auto, Daily, Weekly, Monthly, Quarterly, Yearly]
+            ui:
+              widget: select
+          top_n:
+            type: integer
+            title: Activities shown
+            description: Top activities kept as their own band; the rest fold into "Other".
+            minimum: 2
+            maximum: 12
+            step: 1
+            default: 8
+            ui:
+              widget: slider
+
+    - id: dotted-chart
+      entry: ./widgets/DottedChart.tsx
+      title: Dotted chart
+      description: One dot per event - x = time, y = case (ordered by start), colour = activity.
+      icon: ScatterChart
+      default_w: 8
+      default_h: 9
+      min_w: 6
+      min_h: 8
+      config_schema:
+        properties:
+          max_points:
+            type: integer
+            title: Max points
+            description: Events are down-sampled above this to keep the chart responsive.
+            minimum: 500
+            maximum: 20000
+            step: 500
+            default: 8000
+            ui:
+              widget: slider
+
+permissions:
+  - read:event_log
+  - write:module_results

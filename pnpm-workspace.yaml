@@ -1,0 +1,18 @@
+packages:
+  - "apps/web"
+  - "packages/module-sdk-ts"
+  - "packages/shared-types"
+
+# pnpm 11 refuses to run install scripts unless they're explicitly approved
+# here. Both packages need their postinstall to function:
+#   - sharp: native image codecs used by Next's <Image> optimisation pipeline
+#   - unrs-resolver: native bindings used by ESLint's module resolver
+# (Older pnpm 10 used `onlyBuiltDependencies:` as a list – pnpm 11 replaced
+#  it with this map. We pin Docker builds to pnpm 11+ via corepack, so the
+#  map form is correct.)
+allowBuilds:
+  sharp: true
+  unrs-resolver: true
+  # esbuild needs its postinstall to fetch the platform binary used by
+  # apps/web/scripts/bundle-modules.mjs.
+  esbuild: true

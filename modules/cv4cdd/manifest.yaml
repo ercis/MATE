@@ -1,0 +1,124 @@
+id: cv4cdd
+name: CV4CDD - Concept Drift Detection
+version: 1.0.0
+category: advanced
+description: >-
+  Detects when and how your process changed. It encodes the log as a similarity
+  image and uses a trained object-detection model to find sudden, gradual,
+  incremental, and recurring drifts.
+keywords: ["concept drift", "drift detection", "drift", "sudden drift", "gradual drift", "recurring drift", "change point"]
+author: A. Kraus and H. van der Aa
+license: CC-BY-4.0
+default_enabled: true
+# Runs entirely locally – safe to use against confidential event logs.
+isConfidentialSafe: true
+
+requirements:
+  event_log:
+    # Case-centric: runs on a classic event log (one case per trace). Never
+    # appears for object-centric (OCEL) logs.
+    log_model: case_centric
+    required_columns:
+      - case_id
+      - activity
+      - timestamp
+    min_events: 200
+    min_cases: 20
+
+provides:
+  - cv4cdd.detect
+
+consumes:
+  - log.imported
+
+dependencies:
+  python:
+    # tensorflow ships no cp313 wheels, so this module genuinely cannot run on
+    # Python >= 3.13. The platform now pins in_process venvs to its own
+    # interpreter, so this is no longer needed to stop uv drift – it's a real
+    # constraint the loader validates: on a platform Python outside this range
+    # the module fails fast with a clear message (relax or go subprocess)
+    # instead of a cryptic tensorflow wheel-build error.
+    requires-python: ">=3.12,<3.13"
+    packages:
+      # Keep this list minimal – every extra package risks dragging a numpy
+      # build that doesn't match the platform's. scipy + matplotlib were
+      # replaced by a small bit of inline numpy code + a hardcoded viridis
+      # LUT in cv4cdd_core.py so they don't need to be installed.
+      - "tensorflow>=2.18,<2.21"
+      - "Pillow>=10.0"
+      # Decompress uploaded .tar.zst model archives (see model_store below).
+      - "zstandard>=0.22"
+    inherit:
+      - pm4py
+      - pandas
+      - numpy
+      - duckdb
+    isolation: in_process
+
+frontend:
+  panel: ./panel/index.tsx
+  widgets:
+    - id: drift-detections
+      entry: ./widgets/DriftDetections.tsx
+      title: CV drift detections
+      description: Computer-vision-detected concept drifts with type and confidence.
+      icon: AlertTriangle
+      default_w: 5
+      default_h: 8
+      min_w: 5
+      min_h: 6
+      config_schema:
+        properties:
+          min_confidence:
+            type: number
+            title: Min confidence
+            description: Hide detections below this confidence (0–1).
+            minimum: 0
+            maximum: 1
+            step: 0.05
+            default: 0
+            ui:
+              widget: slider
+
+permissions:
+  - read:event_log
+  - write:module_results
+
+# Large pretrained models are not committed (~0.5 GB each). The settings page
+# renders a "Detection model" card: any user uploads a .tar.zst archive that is
+# extracted into platform-shared storage (modules/cv4cdd/model/), and each
+# account picks which uploaded model it uses. The selected folder name is saved
+# under config_json["model"]. Served by the module's own /models routes.
+model_store:
+  title: Detection model
+  description: >-
+    Upload a pretrained CV4CDD model as a .tar.zst archive. Models are shared
+    across the whole platform – once anyone uploads one, every account can
+    select it here. Choose which model this account uses for detection.
+  accept: .tar.zst
+  config_key: model
+
+config_schema:
+  properties:
+    n_windows:
+      type: integer
+      title: Number of windows
+      description: Number of sliding windows for the WINSIM encoding. The model was trained at 200 - change only if your log has very few cases.
+      minimum: 50
+      maximum: 500
+      default: 200
+      ui:
+        widget: number
+        affects: compute
+    confidence_threshold:
+      type: number
+      title: Detection confidence threshold
+      description: Minimum confidence score (0–1) for a drift detection to be reported.
+      minimum: 0.1
+      maximum: 0.95
+      step: 0.05
+      default: 0.5
+      ui:
+        widget: slider
+        affects: compute

@@ -1,0 +1,93 @@
+id: complexity_v2
+name: Complexity v2
+version: 1.0.0
+category: advanced
+description: >-
+  A complete complexity suite of 28 metrics spanning entropy, size, variation,
+  and trace distance (including edit distance and structural variety), plus the
+  directly-follows transition-probability matrix. Based on Langer's thesis on
+  business process complexity.
+author: E. Langer
+license: MIT
+default_enabled: true
+# Runs entirely locally – safe to use against confidential event logs.
+isConfidentialSafe: true
+
+requirements:
+  event_log:
+    # Case-centric: one case per trace. Never offered for OCEL logs.
+    log_model: case_centric
+    required_columns:
+      - case_id
+      - activity
+      - timestamp
+    min_events: 50
+    min_cases: 2
+
+provides:
+  - complexity_v2.metrics
+
+consumes:
+  - log.imported
+
+dependencies:
+  python:
+    requires-python: ">=3.12"
+    packages: []
+    inherit:
+      - pm4py
+      - pandas
+      - duckdb
+      - numpy
+      - scipy
+    isolation: in_process
+
+frontend:
+  panel: ./panel/index.tsx
+  widgets:
+    - id: complexity-v2-suite
+      entry: ./widgets/ComplexitySuite.tsx
+      title: Complexity suite (v2)
+      description: Headline metrics across size, variation, distance and entropy.
+      icon: Sigma
+      # Fixed-size metric scorecard (8 tiles): locked to a size that shows them all.
+      default_w: 7
+      default_h: 15
+      resizable: false
+    - id: complexity-v2-categories
+      entry: ./widgets/ComplexityCategories.tsx
+      title: Complexity metrics by category
+      description: Every thesis metric (Table 3.3) grouped by category.
+      icon: Table
+      default_w: 6
+      default_h: 9
+      min_w: 5
+      min_h: 7
+  page_layout:
+    - section: Overview
+      widgets: [complexity-v2-suite]
+    - section: All metrics
+      widgets: [complexity-v2-categories]
+
+permissions:
+  - read:event_log
+  - write:module_results
+
+config_schema:
+  properties:
+    max_variants_distance:
+      type: integer
+      title: Distance-metric variant cap
+      description: >-
+        Upper bound on the distinct trace variants used for the Levenshtein-based
+        distance metrics (average edit distance, structural variety). The most
+        frequent variants are kept; larger values are more faithful but cost
+        O(n²) memory and time. The thesis downsamples large logs for the same
+        reason.
+      minimum: 25
+      maximum: 1000
+      default: 300
+      step: 25
+      ui:
+        widget: number
+        affects: compute

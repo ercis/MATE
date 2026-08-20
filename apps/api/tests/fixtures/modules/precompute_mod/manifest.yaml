@@ -1,0 +1,26 @@
+id: precompute_mod
+name: Precompute Module
+version: 0.1.0
+category: foundation
+description: Test fixture – subscribes to log.imported with a @job so a freshly imported log enters the `processing` state until this finishes.
+author: Tests
+license: MIT
+
+requirements:
+  event_log:
+    required_columns:
+      - case_id
+      - activity
+      - timestamp
+    min_events: 1
+    min_cases: 1
+
+consumes:
+  - log.imported
+
+dependencies:
+  python:
+    inherit:
+      - duckdb
+      - pandas
+    isolation: in_process

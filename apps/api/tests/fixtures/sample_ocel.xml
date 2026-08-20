@@ -1,0 +1,66 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<log>
+  <object-types>
+    <object-type name="customer">
+      <attributes/>
+    </object-type>
+    <object-type name="item">
+      <attributes/>
+    </object-type>
+    <object-type name="order">
+      <attributes/>
+    </object-type>
+  </object-types>
+  <event-types>
+    <event-type name="add item">
+      <attributes/>
+    </event-type>
+    <event-type name="create order">
+      <attributes/>
+    </event-type>
+    <event-type name="pay">
+      <attributes/>
+    </event-type>
+    <event-type name="ship">
+      <attributes/>
+    </event-type>
+  </event-types>
+  <objects>
+    <object id="o1" type="order">
+      <attributes/>
+    </object>
+    <object id="i1" type="item">
+      <attributes/>
+    </object>
+    <object id="c1" type="customer">
+      <attributes/>
+    </object>
+  </objects>
+  <events>
+    <event id="e1" type="create order" time="2024-01-01T00:00:00+00:00">
+      <attributes/>
+      <objects>
+        <relationship object-id="o1" qualifier=""/>
+        <relationship object-id="c1" qualifier=""/>
+      </objects>
+    </event>
+    <event id="e2" type="add item" time="2024-01-02T00:00:00+00:00">
+      <attributes/>
+      <objects>
+        <relationship object-id="i1" qualifier=""/>
+      </objects>
+    </event>
+    <event id="e3" type="pay" time="2024-01-03T00:00:00+00:00">
+      <attributes/>
+      <objects>
+        <relationship object-id="o1" qualifier=""/>
+      </objects>
+    </event>
+    <event id="e4" type="ship" time="2024-01-04T00:00:00+00:00">
+      <attributes/>
+      <objects>
+        <relationship object-id="o1" qualifier=""/>
+      </objects>
+    </event>
+  </events>
+</log>

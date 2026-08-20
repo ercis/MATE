@@ -1,0 +1,10 @@
+case_id,activity,timestamp,resource
+case-1,register order,2026-01-01T08:00:00+00:00,alice
+case-1,check stock,2026-01-01T09:00:00+00:00,bob
+case-1,ship,2026-01-01T11:30:00+00:00,alice
+case-2,register order,2026-01-01T08:30:00+00:00,alice
+case-2,check stock,2026-01-01T10:15:00+00:00,bob
+case-2,cancel,2026-01-01T10:45:00+00:00,bob
+case-3,register order,2026-01-02T09:00:00+00:00,carol
+case-3,check stock,2026-01-02T09:45:00+00:00,bob
+case-3,ship,2026-01-02T12:00:00+00:00,alice

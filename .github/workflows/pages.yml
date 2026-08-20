@@ -1,0 +1,43 @@
+# Publishes landing/ to GitHub Pages on every push to main.
+#
+# One-time setup in the repository: Settings -> Pages -> Build and deployment ->
+# Source: "GitHub Actions". Requires the repository to be public (Pages from a
+# private repository needs GitHub Enterprise Cloud).
+name: Deploy landing page
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "landing/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deploys race; queue instead of cancelling a live one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/configure-pages@v5
+
+      # The landing page is a static, dependency-free HTML file - nothing to build.
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: landing
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

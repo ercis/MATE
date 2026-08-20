@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 850" width="1200" height="850" role="img" aria-label="Screenshot pending">
+  <rect width="1200" height="850" fill="#f7f7f9"/>
+  <g fill="none" stroke="#e0e1e8" stroke-width="2">
+    <rect x="40.5" y="40.5" width="1119" height="769" rx="14"/>
+    <path d="M40 112h1120"/>
+  </g>
+  <g fill="#d6d8e0">
+    <circle cx="76" cy="76" r="7"/><circle cx="100" cy="76" r="7"/><circle cx="124" cy="76" r="7"/>
+  </g>
+  <g fill="none" stroke="#c9cbd6" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"
+     transform="translate(560 372) scale(3.4)">
+    <rect x="0" y="1" width="24" height="18" rx="3"/>
+    <path d="M0 14l6.5-5.5 5 4 4.5-4.5L24 14"/>
+    <circle cx="7" cy="6.5" r="2"/>
+  </g>
+  <text x="600" y="530" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, sans-serif"
+        font-size="26" font-weight="600" fill="#878b98">Screenshot pending</text>
+  <text x="600" y="566" text-anchor="middle" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace"
+        font-size="17" fill="#a9acb8">drop the PNG into landing/assets/</text>
+</svg>

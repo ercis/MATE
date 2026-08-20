@@ -1,0 +1,84 @@
+id: complexity
+name: Complexity
+version: 1.0.0
+category: advanced
+description: >-
+  Measures how complex your process is with entropy-based metrics over its
+  variants and activity sequences, plus Lempel-Ziv, affinity, structure, and
+  Pentland's task and process complexity. Uses richer XES trace and event
+  attributes automatically when they are present.
+keywords: ["complexity", "entropy", "variant entropy", "lempel-ziv", "pentland", "structure", "affinity", "epa"]
+author: Augusto et al.
+license: MIT
+default_enabled: true
+# Runs entirely locally – safe to use against confidential event logs.
+isConfidentialSafe: true
+
+requirements:
+  event_log:
+    # Case-centric: runs on a classic event log (one case per trace). Never
+    # appears for object-centric (OCEL) logs.
+    log_model: case_centric
+    required_columns:
+      - case_id
+      - activity
+      - timestamp
+    min_events: 50
+    min_cases: 2
+
+provides:
+  - complexity.metrics
+  - complexity.enriched
+
+consumes:
+  - log.imported
+
+dependencies:
+  python:
+    requires-python: ">=3.12"
+    packages: []
+    inherit:
+      - pm4py
+      - pandas
+      - duckdb
+    isolation: in_process
+
+frontend:
+  panel: ./panel/index.tsx
+  widgets:
+    - id: complexity-metrics
+      entry: ./widgets/ComplexityMetrics.tsx
+      title: Complexity metrics
+      description: Headline EPA-based measures - magnitude, variety, entropy, Lempel–Ziv.
+      icon: Layers
+      # Fixed-size metric scorecard (8 tiles): locked to a size that shows them all.
+      default_w: 7
+      default_h: 15
+      resizable: false
+    - id: entropy-comparison
+      entry: ./widgets/EntropyComparison.tsx
+      title: Entropy comparison
+      description: Normalized variant vs sequence entropy (incl. forgetting).
+      icon: BarChart3
+      default_w: 6
+      default_h: 8
+      min_w: 5
+      min_h: 6
+
+permissions:
+  - read:event_log
+  - write:module_results
+
+config_schema:
+  properties:
+    exponential_k:
+      type: number
+      title: Exponential forgetting k
+      description: Coefficient k for the exponential-forgetting sequence entropy term. The original paper uses k=1.
+      minimum: 0.1
+      maximum: 10.0
+      step: 0.1
+      default: 1.0
+      ui:
+        widget: number
+        affects: compute

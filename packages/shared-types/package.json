@@ -1,0 +1,8 @@
+{
+  "name": "@mate/shared-types",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Generated TypeScript types from the API's OpenAPI schema. Refresh with `pnpm --filter @mate/web codegen`.",
+  "main": "./generated/index.ts",
+  "types": "./generated/index.ts"
+}

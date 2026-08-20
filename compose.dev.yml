@@ -1,0 +1,39 @@
+services:
+  api:
+    # Re-mount the source so uvicorn --reload can watch it.
+    volumes:
+      - ./apps/api/src:/app/apps/api/src
+      - ./apps/api/alembic:/app/apps/api/alembic
+      - ./apps/api/alembic.ini:/app/apps/api/alembic.ini
+      - ./packages/module-sdk-py/src:/app/packages/module-sdk-py/src
+    environment:
+      LOG_LEVEL: debug
+    command:
+      - sh
+      - -c
+      - >
+        alembic -c apps/api/alembic.ini upgrade head &&
+        uvicorn mate.api.main:app --host 0.0.0.0 --port 8000 --reload
+          --reload-dir apps/api/src
+          --reload-dir packages/module-sdk-py/src
+
+  web:
+    # Hot reload runs `next dev` against the mounted source. We bind-mount
+    # apps/web but exclude node_modules / .next so the container's are used.
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      target: deps
+    command: ["pnpm", "--filter", "@mate/web", "dev", "--port", "3000"]
+    environment:
+      # The module bundler defaults to <repo-root>/modules, which isn't mounted
+      # into the dev container; the modules live at /app/modules (base compose
+      # bind-mount). Point the watcher there so panels get rebuilt on change.
+      FF_MODULES_DIR: /app/modules
+    volumes:
+      - ./apps/web:/repo/apps/web
+      - /repo/apps/web/node_modules
+      - /repo/apps/web/.next
+      - ./packages/module-sdk-ts:/repo/packages/module-sdk-ts
+      - ./packages/shared-types:/repo/packages/shared-types
+    working_dir: /repo

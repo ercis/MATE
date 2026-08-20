@@ -1,0 +1,123 @@
+{
+  "realm": "flows-funds",
+  "displayName": "Mate",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "accessTokenLifespan": 900,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "offlineSessionIdleTimeout": 2592000,
+  "refreshTokenMaxReuse": 3,
+  "revokeRefreshToken": true,
+  "roles": {
+    "realm": [
+      {
+        "name": "user",
+        "description": "Default Mate user role"
+      }
+    ]
+  },
+  "defaultRoles": ["user", "offline_access", "uma_authorization"],
+  "requiredActions": [
+    {
+      "alias": "UPDATE_PASSWORD",
+      "name": "Update Password",
+      "providerId": "UPDATE_PASSWORD",
+      "enabled": true,
+      "defaultAction": false,
+      "priority": 30
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "flows-funds-web",
+      "name": "Mate Web",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "flows-funds-web-dev-secret",
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "rootUrl": "http://localhost:3000",
+      "baseUrl": "http://localhost:3000",
+      "redirectUris": [
+        "http://localhost:3000/api/auth/callback/keycloak"
+      ],
+      "webOrigins": [
+        "http://localhost:3000"
+      ],
+      "attributes": {
+        "post.logout.redirect.uris": "http://localhost:3000/login##http://localhost:3000/",
+        "pkce.code.challenge.method": "S256"
+      },
+      "fullScopeAllowed": true,
+      "protocolMappers": [
+        {
+          "name": "flows-funds-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "flows-funds-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "identityProviders": [
+    {
+      "alias": "keycloak-oidc",
+      "displayName": "University Login",
+      "providerId": "keycloak-oidc",
+      "enabled": true,
+      "trustEmail": true,
+      "storeToken": false,
+      "addReadTokenRoleOnCreate": false,
+      "linkOnly": false,
+      "firstBrokerLoginFlowAlias": "first broker login",
+      "config": {
+        "clientId": "REPLACE_WITH_UNIVERSITY_OIDC_CLIENT_ID",
+        "clientSecret": "REPLACE_WITH_UNIVERSITY_OIDC_CLIENT_SECRET",
+        "issuer": "https://idp.uni-muenster.de/REPLACE",
+        "authorizationUrl": "https://idp.uni-muenster.de/REPLACE/authorize",
+        "tokenUrl": "https://idp.uni-muenster.de/REPLACE/token",
+        "userInfoUrl": "https://idp.uni-muenster.de/REPLACE/userinfo",
+        "jwksUrl": "https://idp.uni-muenster.de/REPLACE/jwks",
+        "useJwksUrl": "true",
+        "validateSignature": "true",
+        "defaultScope": "openid profile email",
+        "syncMode": "IMPORT",
+        "pkceEnabled": "true",
+        "pkceMethod": "S256"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "admin@flows-funds.local",
+      "email": "admin@flows-funds.local",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Flows",
+      "lastName": "Admin",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "flowsfunds",
+          "temporary": true
+        }
+      ],
+      "realmRoles": ["user", "offline_access", "uma_authorization"],
+      "requiredActions": ["UPDATE_PASSWORD"]
+    }
+  ]
+}

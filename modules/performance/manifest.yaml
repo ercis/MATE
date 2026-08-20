@@ -1,0 +1,110 @@
+id: performance
+name: Performance
+version: 1.0.0
+category: foundation
+description: >-
+  Measures process speed and bottlenecks: throughput, lead, cycle, and sojourn
+  times, the 90th-percentile cycle time, and a performance-annotated
+  directly-follows graph.
+keywords: ["performance", "bottleneck", "cycle time", "throughput", "lead time", "slow", "kpi", "sojourn", "p90", "waiting time"]
+author: FlowFactory
+license: MIT
+default_enabled: true
+# Runs entirely locally – safe to use against confidential event logs.
+isConfidentialSafe: true
+
+requirements:
+  event_log:
+    # Case-centric: runs on a classic event log (one case per trace). Never
+    # appears for object-centric (OCEL) logs.
+    log_model: case_centric
+    required_columns:
+      - case_id
+      - activity
+      - timestamp
+    optional_columns:
+      - resource
+      - end_timestamp
+    min_events: 100
+    min_cases: 5
+  optional_modules:
+    - id: discovery
+      reason: Performance overlays look best on the discovered DFG.
+
+provides:
+  - perf.kpis
+  - perf.bottlenecks
+  - perf.dfg_performance
+  - perf.cycle_time_distribution
+
+consumes:
+  - log.imported
+
+dependencies:
+  python:
+    requires-python: ">=3.12"
+    packages: []
+    inherit:
+      - pm4py
+      - pandas
+      - duckdb
+    isolation: in_process
+
+frontend:
+  panel: ./panel/index.tsx
+  widgets:
+    - id: kpi-overview
+      entry: ./widgets/KpiOverview.tsx
+      title: Performance KPIs
+      description: Cases, events, variants, throughput and cycle-time summary.
+      icon: Gauge
+      # Fixed-size KPI scorecard (8 tiles): locked to a size that shows them all.
+      default_w: 7
+      default_h: 15
+      resizable: false
+    - id: bottlenecks
+      entry: ./widgets/Bottlenecks.tsx
+      title: Bottlenecks
+      description: Activities ranked by average sojourn time.
+      icon: Hourglass
+      default_w: 6
+      default_h: 9
+      min_w: 5
+      min_h: 6
+      config_schema:
+        properties:
+          top_n:
+            type: integer
+            title: Activities shown
+            description: How many top bottleneck activities to plot.
+            minimum: 3
+            maximum: 20
+            step: 1
+            default: 8
+            ui:
+              widget: slider
+    - id: activity-throughput
+      entry: ./widgets/ActivityThroughput.tsx
+      title: Activity throughput
+      description: Event frequency per activity - the busiest steps.
+      icon: BarChart3
+      default_w: 6
+      default_h: 9
+      min_w: 5
+      min_h: 6
+      config_schema:
+        properties:
+          top_n:
+            type: integer
+            title: Activities shown
+            description: How many most-frequent activities to plot.
+            minimum: 3
+            maximum: 25
+            step: 1
+            default: 10
+            ui:
+              widget: slider
+
+permissions:
+  - read:event_log
+  - write:module_results

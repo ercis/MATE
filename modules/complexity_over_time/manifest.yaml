@@ -1,0 +1,130 @@
+id: complexity_over_time
+name: Complexity over time
+version: 1.0.0
+category: advanced
+description: >-
+  Tracks how your process complexity changes over time. It splits the log into
+  time slices, scores each one, and plots the trend so you can see when the
+  process became simpler or more chaotic. Based on paper by Augusto et al.
+keywords: ["complexity over time", "complexity trend", "entropy over time", "complexity timeline", "kpi over time"]
+author: FlowFactory
+license: MIT
+default_enabled: true
+# Runs entirely locally – safe to use against confidential event logs.
+isConfidentialSafe: true
+
+requirements:
+  event_log:
+    # Case-centric: runs on a classic event log (one case per trace). Never
+    # appears for object-centric (OCEL) logs.
+    log_model: case_centric
+    required_columns:
+      - case_id
+      - activity
+      - timestamp
+    min_events: 50
+    min_cases: 2
+
+provides:
+  - complexity_over_time.timeseries
+
+consumes:
+  - log.imported
+
+dependencies:
+  python:
+    requires-python: ">=3.12"
+    packages: []
+    inherit:
+      - pm4py
+      - pandas
+      - duckdb
+    isolation: in_process
+
+frontend:
+  panel: ./panel/index.tsx
+  widgets:
+    - id: complexity-trend
+      entry: ./widgets/ComplexityTrend.tsx
+      title: Complexity trend
+      description: A complexity metric plotted over evenly-sized time slices.
+      icon: TrendingUp
+      default_w: 8
+      default_h: 8
+      min_w: 6
+      min_h: 6
+      config_schema:
+        properties:
+          metric:
+            type: string
+            title: Metric
+            description: Which complexity measure to plot over time.
+            default: normalized_sequence_entropy
+            enum:
+              - normalized_sequence_entropy
+              - normalized_variant_entropy
+              - normalized_sequence_entropy_linear
+              - normalized_sequence_entropy_exponential
+              - lempel_ziv
+              - magnitude
+              - variety
+              - pentland_process
+            enumLabels:
+              - Sequence entropy (norm.)
+              - Variant entropy (norm.)
+              - Sequence entropy - linear (norm.)
+              - Sequence entropy - exponential (norm.)
+              - Lempel–Ziv
+              - Magnitude
+              - Variety
+              - Pentland process
+            ui:
+              widget: select
+          slices:
+            type: integer
+            title: Time slices
+            description: Number of equal-duration bins the timeline is split into.
+            minimum: 4
+            maximum: 50
+            step: 1
+            default: 12
+            ui:
+              widget: slider
+
+permissions:
+  - read:event_log
+  - write:module_results
+
+config_schema:
+  properties:
+    exponential_k:
+      type: number
+      title: Exponential forgetting k
+      description: Coefficient k for the exponential-forgetting sequence entropy term. The original paper uses k=1.
+      minimum: 0.1
+      maximum: 10.0
+      step: 0.1
+      default: 1.0
+      ui:
+        widget: number
+        affects: compute
+    default_slices:
+      type: integer
+      title: Default number of slices
+      description: Default slice count for Absolute mode (timeline split into N equal-duration bins).
+      minimum: 2
+      maximum: 2000
+      default: 50
+      ui:
+        widget: number
+        affects: compute
+    min_cases_per_slice:
+      type: integer
+      title: Minimum cases per slice
+      description: Slices containing fewer cases than this render as a gap (null point) instead of a noisy metric.
+      minimum: 1
+      maximum: 1000
+      default: 1
+      ui:
+        widget: number
+        affects: compute

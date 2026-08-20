@@ -1,0 +1,30 @@
+# uv virtual workspace root for Mate.
+# The root is not itself an installable package – members live under apps/ and packages/.
+# See INSTRUCTIONS.md §4 for the layout rationale.
+
+[tool.uv.workspace]
+members = [
+    "apps/api",
+    "packages/module-sdk-py",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["apps/api/src", "packages/module-sdk-py/src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N", "SIM", "RUF"]
+ignore = ["E501"]  # line length is enforced by formatter
+
+[tool.ruff.lint.per-file-ignores]
+"apps/api/alembic/versions/*.py" = ["E", "F"]
+
+[tool.pyright]
+include = ["apps/api/src", "packages/module-sdk-py/src"]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+reportMissingTypeStubs = "warning"
+reportUnknownMemberType = "none"
+reportUnknownVariableType = "none"
+reportUnknownArgumentType = "none"

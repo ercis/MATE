@@ -1,0 +1,71 @@
+term,definition
+Business Process,Structured set of activities transforming inputs to outputs for organizational goals.
+Business Process Management (BPM),"Discipline combining business and IT to design, execute, monitor, and improve processes."
+Process Mining,"Data-driven techniques analysing event logs to discover, check, and enhance processes."
+Event Log,"Collection of timestamped events, each linked to a case and activity."
+Case (Process Instance),Single execution of a process identified by a unique ID.
+Activity,Atomic task or step performed within a process.
+Timestamp,Recorded date-time marking when an event occurred.
+Resource,"Person or system executing an activity, stored as an event attribute."
+Process Discovery,Mining an event log to create a process model without prior model.
+Conformance Checking,Comparing observed traces to a reference model to detect deviations.
+Enhancement,Extending an existing model or process with insights mined from event data.
+Alpha Algorithm,Classic discovery technique inferring Petri nets by analysing activity ordering.
+Heuristics Miner,Discovery algorithm tolerating noise by using activity frequency heuristics.
+Inductive Miner,Discovery method producing block-structured models with guaranteed soundness.
+Petri Net,Formal graphical language modelling states and transitions of processes.
+BPMN Diagram,Business Process Model and Notation; visual standard for depicting processes.
+Sequence Pattern,Activity B follows directly after activity A.
+Parallel Split,One branch splits into two or more paths executing concurrently.
+Synchronization,Concurrent paths rejoin before proceeding.
+Exclusive Choice,Exactly one of several alternative paths is selected.
+Simple Merge,Alternative branches reunite without synchronisation requirements.
+Multi-Choice,One or more paths may be taken based on conditions.
+Synchronizing Merge,Waits for all active alternative branches before merging.
+Structured Loop,Activities repeat until a condition is met.
+Deferred Choice,Path decision delayed until first subsequent event occurs.
+Interleaved Parallel Routing,Activities executed in any order but not concurrently.
+Milestone,Process flow enabled when specific state condition becomes true.
+Cancel Case,Terminate all activities of a running instance.
+Handover of Work,Responsibility for a case shifts from one resource to another.
+Separation of Duties,Two distinct resources must perform specified tasks for the same case.
+Case Ownership,One resource responsible for all activities of a case.
+Task Automation,System executes activity without human intervention.
+KPI,Key Performance Indicator; quantitative metric assessing process performance.
+Bottleneck,Activity causing throughput delays due to capacity constraints.
+Concept Drift,Change in process behaviour over time altering underlying data distribution.
+Sudden Drift,Abrupt replacement of old process variant by a new one at a specific time.
+Gradual Drift,Old and new variants coexist during a transition period.
+Incremental Drift,"Series of small, continuous changes accumulating into major transformation."
+Recurring Drift,Previously seen process variant reappears periodically or cyclically.
+Simple Drift,Single isolated process change such as sudden or gradual.
+Complex Drift,"Change composed of multiple simple drifts, e.g., incremental or recurring."
+CV4CDD-4D,Computer-vision framework detecting all four drift types in event logs.
+Change Point,Detected time boundary where process behaviour shifts.
+Context,Information describing conditions surrounding a process.
+Process-Immediate Context,"Factors directly linked to activities, resources, or IT systems."
+Organization-Internal Context,"Intra-company elements like strategy, leadership, policies."
+Organization-External Context,"Outside influences such as regulations, competitors, market trends."
+Environmental Context,"Macro factors like economy, legislation, or weather impacting processes."
+Context Taxonomy,Structured classification of context dimensions supporting systematic analysis.
+Retrieval-Augmented Generation,Technique combining information retrieval with LLM generation to ground answers.
+Hybrid Semantic Search,Uses vector similarity and keywords to fetch relevant documents.
+Vector Store,"Database storing text embeddings for similarity search, e.g., Pinecone."
+Glossary Namespace,Separate vector index segment holding BPM pattern embeddings.
+Large Language Model,Transformer-based AI generating and understanding natural language.
+Prompt,Text instruction steering LLM behaviour for a task.
+Agent-Based Pipeline,Modular workflow where specialised agents handle subtasks sequentially.
+Drift Agent,Component parsing drift outputs and extracting keywords.
+Context Retrieval Agent,Agent fetching context snippets from vector store.
+Franzoi Mapper Agent,Agent classifying snippets into context taxonomy dimensions.
+Re-Ranker Agent,Agent scoring candidate snippets for causal relevance.
+Explanation Agent,Agent synthesising final human-readable drift explanations.
+Confidence Score,Numeric estimate of explanation reliability.
+Hallucination Warning,User disclaimer reminding that LLM outputs may be incorrect.
+Traceability,Ability to follow system outputs back to evidence and reasoning steps.
+Evaluation Harness,Automated test suite measuring retrieval and explanation accuracy.
+Recall@k,Metric counting proportion of relevant items within top-k results.
+Mean Reciprocal Rank,Average inverse rank of first correct result across queries.
+Cosine Similarity,Numerical measure of semantic closeness between two text vectors.
+Calibration Plot,Visual chart comparing confidence bins with actual accuracy.
+Human-in-the-Loop,Design where humans oversee and validate AI outputs.

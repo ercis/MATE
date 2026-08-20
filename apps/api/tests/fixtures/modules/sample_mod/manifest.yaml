@@ -1,0 +1,29 @@
+id: sample_mod
+name: Sample Module
+version: 0.1.0
+category: foundation
+description: Test fixture module – exercises @route and @on_event without any extra deps.
+author: Tests
+license: MIT
+
+requirements:
+  event_log:
+    required_columns:
+      - case_id
+      - activity
+      - timestamp
+    min_events: 1
+    min_cases: 1
+
+provides:
+  - sample.ping
+
+consumes:
+  - log.imported
+
+dependencies:
+  python:
+    inherit:
+      - duckdb
+      - pandas
+    isolation: in_process

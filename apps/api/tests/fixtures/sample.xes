@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<log xes.version="2.0" xmlns="http://www.xes-standard.org/">
+  <extension name="Concept" prefix="concept" uri="http://www.xes-standard.org/concept.xesext"/>
+  <extension name="Time" prefix="time" uri="http://www.xes-standard.org/time.xesext"/>
+  <extension name="Organizational" prefix="org" uri="http://www.xes-standard.org/org.xesext"/>
+  <trace>
+    <string key="concept:name" value="case-1"/>
+    <event>
+      <string key="concept:name" value="register order"/>
+      <date key="time:timestamp" value="2026-01-01T08:00:00+00:00"/>
+      <string key="org:resource" value="alice"/>
+    </event>
+    <event>
+      <string key="concept:name" value="check stock"/>
+      <date key="time:timestamp" value="2026-01-01T09:00:00+00:00"/>
+      <string key="org:resource" value="bob"/>
+    </event>
+    <event>
+      <string key="concept:name" value="ship"/>
+      <date key="time:timestamp" value="2026-01-01T11:30:00+00:00"/>
+      <string key="org:resource" value="alice"/>
+    </event>
+  </trace>
+  <trace>
+    <string key="concept:name" value="case-2"/>
+    <event>
+      <string key="concept:name" value="register order"/>
+      <date key="time:timestamp" value="2026-01-01T08:30:00+00:00"/>
+      <string key="org:resource" value="alice"/>
+    </event>
+    <event>
+      <string key="concept:name" value="check stock"/>
+      <date key="time:timestamp" value="2026-01-01T10:15:00+00:00"/>
+      <string key="org:resource" value="bob"/>
+    </event>
+    <event>
+      <string key="concept:name" value="cancel"/>
+      <date key="time:timestamp" value="2026-01-01T10:45:00+00:00"/>
+      <string key="org:resource" value="bob"/>
+    </event>
+  </trace>
+  <trace>
+    <string key="concept:name" value="case-3"/>
+    <event>
+      <string key="concept:name" value="register order"/>
+      <date key="time:timestamp" value="2026-01-02T09:00:00+00:00"/>
+      <string key="org:resource" value="carol"/>
+    </event>
+    <event>
+      <string key="concept:name" value="check stock"/>
+      <date key="time:timestamp" value="2026-01-02T09:45:00+00:00"/>
+      <string key="org:resource" value="bob"/>
+    </event>
+    <event>
+      <string key="concept:name" value="ship"/>
+      <date key="time:timestamp" value="2026-01-02T12:00:00+00:00"/>
+      <string key="org:resource" value="alice"/>
+    </event>
+  </trace>
+</log>

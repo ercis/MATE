@@ -1,0 +1,28 @@
+id: chained_mod
+name: Chained Module
+version: 0.1.0
+category: other
+description: Test fixture – precomputes only after precompute_mod, by subscribing to its reserved precompute_mod.completed event.
+author: Tests
+license: MIT
+
+requirements:
+  event_log:
+    required_columns:
+      - case_id
+      - activity
+      - timestamp
+    min_events: 1
+    min_cases: 1
+  optional_modules:
+    - id: precompute_mod
+
+consumes:
+  - precompute_mod.completed
+
+dependencies:
+  python:
+    inherit:
+      - duckdb
+      - pandas
+    isolation: in_process

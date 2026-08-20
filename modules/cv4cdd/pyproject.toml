@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ff-mod-cv4cdd"
+version = "1.0.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # Mirror manifest.yaml's declared deps exactly. scipy/matplotlib are NOT
+    # listed: they're imported only by the reference-only
+    # approaches/object_detection subtree (see cv4cdd_core.py), which the
+    # running module never imports – cosine distance and the viridis colormap
+    # are reimplemented inline to keep the numpy build aligned with the
+    # platform's. zstandard is required by module.py to decompress uploaded
+    # .tar.zst model archives.
+    "tensorflow>=2.18,<2.21",
+    "Pillow>=10.0",
+    "zstandard>=0.22",
+]
+
+[tool.hatch.build.targets.wheel]
+bypass-selection = true

@@ -1,0 +1,77 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.uv/
+build/
+dist/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyright/
+.coverage
+htmlcov/
+
+# Node / Next.js
+node_modules/
+.next/
+.turbo/
+out/
+
+# Exporter logs
+.cc-history/
+
+# Modules are tracked in git (source + manifest). Only the per-folder build
+# artefacts and large/vendored payloads below are ignored.
+modules/*/.venv/
+modules/*/.dist/
+modules/*/node_modules/
+modules/node_modules
+modules/*/.installed-hash
+
+# CV4CDD vendored source (cloned separately – not committed)
+modules/*/cv4cdd/
+
+# CV4CDD pretrained models are large (~0.5 GB each) and uploaded at runtime via
+# the module's settings page – never committed. The dir itself is kept via a
+# .gitkeep; the per-folder rules live in modules/cv4cdd/model/.gitignore.
+
+# Runtime data (the directory layout itself is kept via .gitkeep)
+# `data/...` patterns are anchored to the repo root, so the per-app runtime
+# dirs (created when the API runs outside Docker) need their own rules.
+apps/api/data/
+data/event_logs/*
+!data/event_logs/.gitkeep
+data/module_results/*
+!data/module_results/.gitkeep
+data/users/
+data/.multi_user_migrated
+data/metadata.db
+data/metadata.db-wal
+data/metadata.db-shm
+data/*.bak
+
+# Local environment overrides (Auth.js + Keycloak secrets land here)
+.env
+.env.local
+apps/web/.env.local
+
+# Generated TypeScript types
+packages/shared-types/generated/
+
+# Incremental TypeScript build state
+*.tsbuildinfo
+
+# Local scratch notes
+tasks.md
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+# Local deploy target (VM hostname / SSH login) - never committed
+scripts/deploy.env

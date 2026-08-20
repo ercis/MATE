@@ -1,0 +1,45 @@
+id: process_comparison
+name: Process Comparison
+version: 0.1.0
+category: comparison
+description: >-
+  Compares two or more event logs side by side: an overlaid
+  directly-follows-graph diff, variant differences, similarity scores (EMD and
+  footprints), and per-activity frequency changes.
+keywords: ["compare", "comparison", "diff", "difference", "versus", "overlay", "two logs", "process comparison"]
+author: FlowFactory
+license: MIT
+# Runs entirely locally (pm4py / duckdb) – safe against confidential logs.
+isConfidentialSafe: true
+
+requirements:
+  event_log:
+    # Case-centric only. Comparison opens other logs via ctx.open_event_log,
+    # which itself only serves case-centric logs.
+    log_model: case_centric
+    required_columns:
+      - case_id
+      - activity
+      - timestamp
+    min_events: 50
+    min_cases: 2
+
+consumes:
+  - log.imported
+
+dependencies:
+  python:
+    requires-python: ">=3.12"
+    packages: []
+    inherit:
+      - pm4py
+      - pandas
+      - duckdb
+    isolation: in_process
+
+frontend:
+  panel: ./panel/index.tsx
+
+permissions:
+  - read:event_log
+  - write:module_results

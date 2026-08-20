@@ -1,0 +1,139 @@
+id: agentsimulator
+name: AgentSimulator
+version: 0.1.0
+category: advanced
+description: >-
+  Simulates your process as a team of interacting agents. It learns each
+  resource's behaviour, working calendars, and handovers from your log,
+  generates realistic synthetic logs, and scores them against a held-out slice
+  of the real data.
+author: Lukas Kirchdorfer et al.
+license: MIT
+
+requirements:
+  event_log:
+    log_model: case_centric
+    # AgentSimulator is agent/resource-based, so a resource and a start
+    # (`timestamp`) are required. `end_timestamp` is used for activity durations
+    # when present but is optional – most real logs carry a single timestamp, and
+    # the adapter falls back to zero-duration activities (control flow, arrivals
+    # and handovers are still modelled).
+    required_columns: [case_id, activity, timestamp, resource]
+    optional_columns: [end_timestamp]
+    min_events: 200
+    min_cases: 20
+  modules: []
+  optional_modules: []
+
+# Bus topic emitted when a simulation run finishes (schema in events.py).
+provides:
+  - agentsimulator.simulation.completed
+consumes: []
+
+dependencies:
+  python:
+    # The upstream code pins numpy 1.x / pandas 2.x – incompatible with the
+    # platform's numpy 2.x / pandas 3.x – so it needs its own venv (subprocess).
+    # The venv is built on 3.12: the platform SDK (mate-sdk) requires >=3.12 and
+    # is installed into the worker venv, so 3.9 is not an option. The pinned deps
+    # all ship cp312 wheels. Capped <3.13 because numpy 1.26.4 has no 3.13 wheels.
+    requires-python: ">=3.12,<3.13"
+    isolation: subprocess
+    # Pinned to the upstream requirements.txt versions. tensorflow / keras /
+    # scikit-learn / pulp / cvxopt are dropped – they are listed upstream but
+    # never imported by source/ (verified), saving ~600 MB and the broken
+    # tensorflow-io-gcs-filesystem wheel. `inherit` is unusable across a process
+    # boundary, so every dependency is declared here explicitly.
+    packages:
+      - "numpy==1.26.4"
+      - "pandas==2.2.2"
+      - "scipy==1.13.1"
+      - "Mesa==2.1.2"
+      - "networkx==3.2.1"
+      - "pm4py==2.7.11.13"
+      - "polars==0.20.16"
+      - "pytz==2024.1"
+      - "lxml==5.3.0"
+      - "python-dateutil==2.9.0.post0"
+      - "tqdm==4.66.5"
+      - "pyarrow==17.0.0"            # read the host→worker Parquet event-log handoff
+      # The five fidelity measures are computed in metrics.py with numpy + scipy.
+      # The `log-distance-measures` package was dropped: it hard-pins
+      # jellyfish==0.11.2, which has no cp312 wheel and won't build on the 3.12
+      # worker (and the SDK requires >=3.12, so an older Python is impossible).
+    inherit: []
+  npm: []
+
+frontend:
+  panel: ./panel/index.tsx
+  widgets:
+    - id: fidelity-scorecard
+      entry: ./widgets/FidelityScorecard.tsx
+      title: Simulation fidelity
+      description: NGD / AEDD / CEDD / REDD / CTDD distance of the latest simulation to the real log (lower is better).
+      default_w: 9
+      default_h: 7
+      min_w: 8
+      min_h: 6
+    - id: cycle-time-comparison
+      entry: ./widgets/CycleTimeComparison.tsx
+      title: Cycle time – real vs simulated
+      description: Case-duration distribution of the real log overlaid with the simulated logs.
+      default_w: 6
+      default_h: 7
+      min_w: 5
+      min_h: 6
+    - id: arrivals-comparison
+      entry: ./widgets/ArrivalsComparison.tsx
+      title: Case arrivals – real vs simulated
+      description: New cases started over time, real vs simulated.
+      default_w: 6
+      default_h: 7
+      min_w: 5
+      min_h: 6
+  page_layout:
+    - section: Fidelity
+      widgets: [fidelity-scorecard]
+    - section: Distributions
+      widgets: [cycle-time-comparison, arrivals-comparison]
+
+permissions:
+  - read:event_log
+  - write:module_results
+
+# Run parameters. Subprocess routes cannot take typed request bodies, so the
+# panel writes these via PUT /api/v1/modules/agentsimulator/config and the
+# @job handler reads them from ctx.config.
+config_schema:
+  properties:
+    num_simulations:
+      type: integer
+      title: Simulated logs
+      description: How many synthetic logs to generate. More runs give a stabler fidelity score; the simulation is stochastic.
+      minimum: 1
+      maximum: 10
+      step: 1
+      default: 5
+      ui:
+        widget: slider
+    central_orchestration:
+      type: boolean
+      title: Central orchestration
+      description: Assign work centrally instead of letting agents hand work over autonomously (the `orchestrated` mode). Ignored when "Determine automatically" is on.
+      default: false
+      ui:
+        widget: switch
+    extr_delays:
+      type: boolean
+      title: Discover extraneous delays
+      description: Also discover waiting times not explained by resource availability. Slower.
+      default: false
+      ui:
+        widget: switch
+    determine_automatically:
+      type: boolean
+      title: Determine configuration automatically
+      description: Let AgentSimulator pick handover type and extraneous delays by trial simulations. Most accurate but much slower.
+      default: false
+      ui:
+        widget: switch
