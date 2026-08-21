@@ -227,12 +227,13 @@
   .th-body p { font-size: 15.5px; color: var(--ink-soft); }
 
   /* ---------- statement band ---------- */
-  .statement { padding: 84px 0; text-align: center; }
+  .statement { padding: 104px 0 96px; text-align: center; }
+  .statement .st-mark { width: 30px; height: 30px; margin: 0 auto 26px; display: block; opacity: 0.85; }
   .statement p {
-    font-size: clamp(24px, 3vw, 34px); font-weight: 600; letter-spacing: -0.022em;
-    line-height: 1.25; max-width: 24em; margin: 0 auto; color: var(--ink);
+    font-size: clamp(28px, 3.4vw, 44px); font-weight: 700; letter-spacing: -0.025em;
+    line-height: 1.16; max-width: 21em; margin: 0 auto; color: var(--ink);
   }
-  .statement p em { font-style: normal; color: var(--muted); }
+  .statement p em { font-style: normal; color: var(--muted); display: block; font-size: 0.62em; font-weight: 600; margin-top: 14px; letter-spacing: -0.01em; }
 
   /* ---------- community ---------- */
   .community { position: relative; overflow: hidden; padding-top: 0; }
@@ -323,13 +324,13 @@
     <div class="wrap">
       <span class="hero-chip"><span class="dot"></span> A modular process mining platform</span>
       <h1>Share your work with the process science community.</h1>
-      <p class="sub">PM-MATE runs in the browser: analysts upload event logs and work with research-backed modules, researchers publish their methods as modules that anyone can run. One platform, both sides of the field.</p>
+      <p class="sub">PM-MATE runs in the browser: analysts upload event logs and work with research-backed modules, researchers publish their methods as modules that anyone can run. Contributing is a manifest and a handler class, so methods leave their repositories and get used.</p>
       <div class="cta-row">
         <a class="btn btn-black" href="https://pm-mate.uni-muenster.de">Open PM-MATE</a>
         <a class="btn btn-ghost" href="https://github.com/ercis/MATE">View on GitHub</a>
       </div>
       <div class="hero-shot reveal">
-        <img src="assets/shot-hero.png" alt="The PM-MATE platform: a process overview with module library and the MATE AI assistant sidebar">
+        <img id="hero-img" data-base="assets/shot-hero" src="assets/shot-hero.png" alt="The PM-MATE platform: a process overview with module library and the MATE AI assistant sidebar">
       </div>
       <p class="hero-cap">The platform: one process, its module library, and the MATE AI assistant.</p>
     </div>
@@ -345,6 +346,14 @@
     </div>
   </div>
 
+  <!-- ================= STATEMENT ================= -->
+  <section class="statement">
+    <div class="wrap reveal">
+      <img class="st-mark logo-dark-invert" src="assets/pm-mate-icon-black.svg" alt="">
+      <p>Code becomes a tool the moment someone else can run it. <em>PM-MATE is where that happens.</em></p>
+    </div>
+  </section>
+
   <!-- ================= IDEA ================= -->
   <section>
     <div class="wrap">
@@ -357,7 +366,7 @@
         <div class="prop reveal">
           <span class="label">Bridge</span>
           <h3>Both sides of the field</h3>
-          <p>Analysts get a guided workflow from upload to insight. Method authors get a sandboxed runtime, typed SDKs, and a generated UI for their parameters.</p>
+          <p>Analysts who know the process, not the code, get a guided workflow from upload to insight. Method authors get a sandboxed runtime, typed SDKs, and a generated UI for their parameters.</p>
         </div>
         <div class="prop reveal">
           <span class="label">Workspace</span>
@@ -403,13 +412,6 @@
   </section>
   </div>
 
-  <!-- ================= STATEMENT ================= -->
-  <section class="statement">
-    <div class="wrap reveal">
-      <p>Code becomes a tool the moment someone else can run it. <em>PM-MATE is where that happens.</em></p>
-    </div>
-  </section>
-
   <!-- ================= COMMUNITY ================= -->
   <section id="community" class="community">
     <div class="wrap">
@@ -448,15 +450,15 @@
         <p>PM-MATE is open to everyone who works with processes, whether they write methods or apply them. These are the people behind the platform and its first modules.</p>
       </div>
       <div class="people-grid reveal">
-        <div class="person"><span class="pavatar">SF</span><b>Sandro Franzoi</b></div>
-        <div class="person"><span class="pavatar">PB</span><b>Paul Brützke</b></div>
-        <div class="person"><span class="pavatar">JB</span><b>Jan vom Brocke</b></div>
-        <div class="person"><span class="pavatar">JM</span><b>Jan Mendling</b></div>
         <div class="person"><span class="pavatar">HA</span><b>Han van der Aa</b></div>
-        <div class="person"><span class="pavatar">TZ</span><b>Tobias Zimmermann</b></div>
+        <div class="person"><span class="pavatar">JB</span><b>Jan vom Brocke</b></div>
         <div class="person"><span class="pavatar">YB</span><b>Yannick Brusa</b></div>
+        <div class="person"><span class="pavatar">PB</span><b>Paul Brützke</b></div>
+        <div class="person"><span class="pavatar">SF</span><b>Sandro Franzoi</b></div>
         <div class="person"><span class="pavatar">FK</span><b>Finn Klessascheck</b></div>
+        <div class="person"><span class="pavatar">JM</span><b>Jan Mendling</b></div>
         <div class="person"><span class="pavatar">PM</span><b>Philipp Michels</b></div>
+        <div class="person"><span class="pavatar">TZ</span><b>Tobias Zimmermann</b></div>
       </div>
       <p class="people-note reveal">Ship a module and your name joins this list.</p>
     </div>
@@ -468,10 +470,11 @@
     <div class="wrap">
       <div class="reveal">
         <h2>Bring your method into application.</h2>
-        <p>PM-MATE runs online. Open the platform, import an event log, and see your process in minutes.</p>
+        <p>PM-MATE runs online. Open the platform, import an event log, and see your process in minutes. Building a method of your own? Say hello and ship it as a module.</p>
         <div class="cta-row">
           <a class="btn btn-black" href="https://pm-mate.uni-muenster.de">Open PM-MATE</a>
-          <a class="btn btn-ghost" href="https://github.com/ercis/MATE">View on GitHub</a>
+          <!-- PLACEHOLDER target: swap for a contact form or mailing list once one exists -->
+          <a class="btn btn-ghost" href="https://github.com/ercis/MATE/issues/new?title=Join%20the%20PM-MATE%20community">Join the community</a>
         </div>
       </div>
     </div>
@@ -510,6 +513,7 @@
       if (theme === 'dark') { root.setAttribute('data-theme', 'dark'); }
       else { root.removeAttribute('data-theme'); }
       if (btn) btn.textContent = theme === 'dark' ? '☀' : '☾';
+      if (window.__updateShots) window.__updateShots();
       requestAnimationFrame(function () {
         requestAnimationFrame(function () { root.classList.remove('theme-snap'); });
       });
@@ -543,36 +547,41 @@
   (function () {
     var STEPS = [
       {
-        shot: 'assets/shot-processes.png', pos: 'top',
+        shot: 'assets/shot-processes', pos: 'top',
         capb: 'The workspace.', cap: 'Four imported logs, one of them object-centric (OCEL).',
         title: 'One home for your event logs',
         desc: 'Drop XES, CSV, or OCEL files into the workspace and start mining. Guided column mapping and automatic normalization handle messy exports. Watched folders import new logs as they arrive.'
       },
       {
-        shot: 'assets/shot-modules.png', pos: 'top',
+        shot: 'assets/shot-modules', pos: 'top',
         capb: 'The module library', cap: 'of one process, grouped into discovery, intelligence, and comparison.',
         title: 'Analyses ship as modules',
         desc: 'Every capability carries its own version, author, and academic source. Enable what you need, from classic discovery to agent-based simulation, or upload a module of your own.'
       },
       {
-        shot: 'assets/shot-discovery.png', pos: '50% 30%',
+        shot: 'assets/shot-discovery', pos: '50% 30%',
         capb: 'An Inductive-miner Petri net', cap: 'of a loan process, one of five interchangeable notations.',
         title: 'See how the process runs',
         desc: 'Mine directly-follows graphs, Petri nets, process trees, heuristics nets, or BPMN diagrams from your log. Overlay timing, check conformance against a reference model, and drill into variants.'
       },
       {
-        shot: 'assets/shot-dashboard.png', pos: 'top',
+        shot: 'assets/shot-dashboard', pos: 'top',
         capb: 'A template dashboard', cap: 'wired to a helpdesk log: KPIs, bottlenecks, throughput.',
         title: 'Every module on one canvas',
         desc: 'Drag KPIs, charts, and model views from any module onto a shared board. Complexity trends sit beside cycle times beside drift points, and the whole board is shareable with your team.'
       },
       {
-        shot: 'assets/shot-mate-ai.png', pos: 'top',
+        shot: 'assets/shot-mate-ai', pos: 'top',
         capb: 'MATE AI', cap: 'beside the process overview. It sees aggregates on screen and none of the raw events.',
         title: 'An assistant behind a data wall',
         desc: 'A context-aware assistant on every page: summarize a process, walk through a variant, find bottlenecks. It reads the aggregates already on your screen, and a strict data wall keeps raw event data out of every prompt.'
       }
     ];
+    function shotSrc(base) {
+      var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+      return base + (dark ? '-dark' : '') + '.png';
+    }
+    var current = 0;
     var tabs = Array.prototype.slice.call(document.querySelectorAll('.th-tab'));
     var img = document.getElementById('th-img');
     if (!tabs.length || !img) return;
@@ -580,13 +589,14 @@
     var cap = document.getElementById('th-cap');
     var title = document.getElementById('th-title');
     var desc = document.getElementById('th-desc');
-    STEPS.forEach(function (s) { var pre = new Image(); pre.src = s.shot; });
+    STEPS.forEach(function (s) { new Image().src = s.shot + '.png'; new Image().src = s.shot + '-dark.png'; });
     function activate(idx) {
+      current = idx;
       var s = STEPS[idx];
       tabs.forEach(function (t, i) { t.classList.toggle('active', i === idx); t.setAttribute('aria-selected', i === idx ? 'true' : 'false'); });
       img.style.opacity = '0';
       setTimeout(function () {
-        img.src = s.shot;
+        img.src = shotSrc(s.shot);
         img.style.objectPosition = s.pos;
         capb.textContent = s.capb;
         cap.textContent = s.cap;
@@ -598,12 +608,20 @@
     tabs.forEach(function (t) {
       t.addEventListener('click', function () { activate(Number(t.dataset.i)); });
     });
+    window.__updateShots = function () {
+      var hero = document.getElementById('hero-img');
+      if (hero) { delete hero.dataset.fellBack; hero.src = shotSrc(hero.dataset.base); }
+      delete img.dataset.fellBack;
+      img.src = shotSrc(STEPS[current].shot);
+    };
+    window.__updateShots();
   })();
 
   /* Screenshots land in assets/ as they are captured - see landing/README.md.
      Until one exists, show a labelled placeholder instead of a broken image. */
   (function () {
     function fallback(img) {
+      if (/-dark\.png$/.test(img.src)) { img.src = img.src.replace('-dark.png', '.png'); return; }
       if (img.dataset.fellBack) return;
       img.dataset.fellBack = '1';
       img.src = 'assets/placeholder.svg';
