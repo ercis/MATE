@@ -396,7 +396,7 @@
         <div class="th-tabs" role="tablist">
           <button class="th-tab active" role="tab" data-i="0"><span>01</span>Workspace</button>
           <button class="th-tab" role="tab" data-i="1"><span>02</span>Module library</button>
-          <button class="th-tab" role="tab" data-i="2"><span>03</span>Discovery</button>
+          <button class="th-tab" role="tab" data-i="2"><span>03</span>Cross-module</button>
           <button class="th-tab" role="tab" data-i="3"><span>04</span>Dashboards</button>
           <button class="th-tab" role="tab" data-i="4"><span>05</span>MATE AI</button>
         </div>
@@ -558,10 +558,10 @@
         desc: 'Every capability carries its own version, author, and academic source. Enable what you need, from classic discovery to agent-based simulation, or upload a module of your own.'
       },
       {
-        shot: 'assets/shot-discovery', pos: '50% 30%',
-        capb: 'An Inductive-miner Petri net', cap: 'of a loan process, one of five interchangeable notations.',
-        title: 'See how the process runs',
-        desc: 'Mine directly-follows graphs, Petri nets, process trees, heuristics nets, or BPMN diagrams from your log. Overlay timing, check conformance against a reference model, and drill into variants.'
+        shot: 'assets/shot-crossmodule', pos: 'top',
+        capb: 'Performance over Time', cap: "with a drift band found by CV4CDD. One module's result, drawn into another's chart.",
+        title: 'Modules build on each other',
+        desc: "CV4CDD detects concept drift in the log. The drift periods show up as shaded bands in Performance over Time and feed the Concept Drift Explainer, which searches your uploaded documents for the cause. One module's output is the next module's input."
       },
       {
         shot: 'assets/shot-dashboard', pos: 'top',

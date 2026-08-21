@@ -24,7 +24,7 @@ broken image - drop the real file in and it takes over on the next deploy.
 | `shot-hero.png` | Hero, full width | A process overview with the module library visible and the MATE AI sidebar open - the one shot that has to sell the product at a glance. |
 | `shot-processes.png` | Tab 01, Workspace | The processes list with several imported logs, at least one of them object-centric (OCEL), so the format badges show. |
 | `shot-modules.png` | Tab 02, Module library | One process's module library, scrolled so the category grouping (discovery / intelligence / comparison) is readable. |
-| `shot-discovery.png` | Tab 03, Discovery | An Inductive-miner Petri net of a reasonably branchy log. Cropped to `50% 30%`, so keep the interesting part of the model near the upper middle. |
+| `shot-crossmodule.png` | Tab 03, Cross-module | Performance over Time on a log with a CV4CDD-detected drift: the shaded drift band must be visible in the chart, so one module's result shows up inside another's view. |
 | `shot-dashboard.png` | Tab 04, Dashboards | A dashboard with a mix of widget kinds on one canvas - KPI tiles, a chart, and a model view. |
 | `shot-mate-ai.png` | Tab 05, MATE AI | The MATE AI sidebar mid-conversation next to a process page, with an answer that shows it reasoning about the process. |
 
