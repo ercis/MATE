@@ -4,31 +4,63 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PM-MATE — A modular process mining platform</title>
-<meta name="description" content="PM-MATE is a modular process mining platform. Upload an event log, work with research-backed modules, and share your own methods with the community.">
+<meta name="description" content="PM-MATE is a modular process mining platform. Upload an event log, work with research-backed modules, and share your own methods with the process science community.">
 <link rel="icon" href="assets/pm-mate-icon-black.svg" type="image/svg+xml">
 <meta property="og:type" content="website">
 <meta property="og:title" content="PM-MATE - A modular process mining platform">
-<meta property="og:description" content="Upload an event log, work with research-backed modules, and share your own methods with the community.">
-<meta property="og:image" content="assets/shot-hero.png">
+<meta property="og:description" content="Upload an event log, work with research-backed modules, and share your own methods with the process science community.">
+<meta property="og:image" content="https://ercis.github.io/MATE/assets/shot-hero.png">
 <meta name="twitter:card" content="summary_large_image">
 <style>
   :root {
     --bg: #fdfdfd;
+    --surface: #ffffff;
     --panel: #f7f7f9;
+    --card: #ffffff;
     --ink: #17181c;
     --ink-soft: #494c57;
     --muted: #878b98;
     --line: #e7e8ee;
     --line-soft: #f0f1f5;
-    --black: #141414;
+    --btn-bg: #141414;
+    --btn-ink: #ffffff;
+    --chip-bg: rgba(255, 255, 255, 0.75);
+    --header-bg: rgba(253, 253, 253, 0.82);
     --lav: rgba(196, 181, 253, 0.55);
     --rose: rgba(247, 200, 221, 0.6);
     --sky: rgba(186, 210, 253, 0.45);
+    --av-lav: rgba(196, 181, 253, 0.35);
+    --av-rose: rgba(247, 200, 221, 0.4);
+    --av-sky: rgba(186, 210, 253, 0.35);
     --sans: ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
     --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
     --maxw: 1180px;
     --radius: 14px;
     --card-shadow: 0 1px 2px rgba(23, 24, 28, 0.05), 0 8px 28px rgba(23, 24, 28, 0.06);
+    --hero-shadow: 0 2px 6px rgba(23, 24, 28, 0.06), 0 24px 70px rgba(23, 24, 28, 0.13);
+  }
+  [data-theme="dark"] {
+    --bg: #0e0e12;
+    --surface: #121217;
+    --panel: #14141a;
+    --card: #17171d;
+    --ink: #f0f0f4;
+    --ink-soft: #b4b6c1;
+    --muted: #797c89;
+    --line: #26262e;
+    --line-soft: #1d1d24;
+    --btn-bg: #f0f0f4;
+    --btn-ink: #141414;
+    --chip-bg: rgba(23, 23, 29, 0.75);
+    --header-bg: rgba(14, 14, 18, 0.82);
+    --lav: rgba(110, 84, 210, 0.28);
+    --rose: rgba(170, 50, 110, 0.2);
+    --sky: rgba(60, 90, 190, 0.2);
+    --av-lav: rgba(110, 84, 210, 0.32);
+    --av-rose: rgba(170, 50, 110, 0.28);
+    --av-sky: rgba(60, 90, 190, 0.3);
+    --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 28px rgba(0, 0, 0, 0.35);
+    --hero-shadow: 0 2px 6px rgba(0, 0, 0, 0.4), 0 24px 70px rgba(0, 0, 0, 0.5);
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html { scroll-behavior: smooth; }
@@ -41,6 +73,8 @@
     -webkit-font-smoothing: antialiased;
     overflow-x: hidden;
   }
+  /* theme switch: snap in a single paint, no staggered per-element transitions */
+  html.theme-snap *, html.theme-snap *::before, html.theme-snap *::after { transition: none !important; }
   a { color: var(--ink); text-decoration: none; }
   a:hover { text-decoration: underline; text-underline-offset: 3px; }
   code, pre { font-family: var(--mono); }
@@ -55,32 +89,41 @@
   /* ---------- header ---------- */
   header {
     position: sticky; top: 0; z-index: 50;
-    background: rgba(253, 253, 253, 0.82);
+    background: var(--header-bg);
     backdrop-filter: blur(12px);
     border-bottom: 1px solid var(--line-soft);
   }
-  .nav { display: flex; align-items: center; height: 60px; gap: 30px; }
+  .nav { display: flex; align-items: center; height: 60px; gap: 26px; }
   .brand { display: flex; align-items: center; gap: 11px; font-weight: 650; font-size: 17px; letter-spacing: -0.015em; }
   .brand img { width: 22px; height: 22px; }
-  .nav-links { display: flex; gap: 26px; margin-left: auto; font-size: 14.5px; font-weight: 500; align-items: center; }
+  [data-theme="dark"] .logo-dark-invert { filter: invert(1); }
+  .nav-links { display: flex; gap: 24px; margin-left: auto; font-size: 14.5px; font-weight: 500; align-items: center; }
   .nav-links a { color: var(--ink-soft); }
   .nav-links a:hover { color: var(--ink); text-decoration: none; }
   .btn {
     display: inline-flex; align-items: center; justify-content: center; gap: 9px;
     padding: 11px 22px; font-size: 15px; font-weight: 600; border-radius: 10px;
-    border: 1px solid transparent;
+    border: 1px solid transparent; cursor: pointer;
     transition: transform 140ms ease-out, box-shadow 140ms ease-out, background 140ms ease-out;
   }
   .btn:hover { text-decoration: none; transform: translateY(-1px); }
-  .btn-black { background: var(--black); color: #fff; }
+  .btn-black { background: var(--btn-bg); color: var(--btn-ink); }
   .btn-black:hover { box-shadow: 0 6px 20px rgba(20, 20, 20, 0.25); }
-  .btn-ghost { border-color: var(--line); color: var(--ink); background: #fff; }
-  .btn-ghost:hover { box-shadow: 0 4px 14px rgba(23, 24, 28, 0.08); }
+  .btn-ghost { border-color: var(--line); color: var(--ink); background: var(--card); }
+  .btn-ghost:hover { box-shadow: 0 4px 14px rgba(23, 24, 28, 0.12); }
   .nav .btn { padding: 8px 16px; font-size: 14px; }
-  .nav-links a.btn-black, .nav-links a.btn-black:hover { color: #fff; }
+  .nav-links a.btn-black, .nav-links a.btn-black:hover { color: var(--btn-ink); }
+  .theme-toggle {
+    background: transparent; border: 1px solid var(--line); border-radius: 8px;
+    width: 34px; height: 34px; cursor: pointer; color: var(--ink-soft);
+    font-size: 15px; line-height: 1; display: inline-flex; align-items: center; justify-content: center;
+    transition: background 140ms ease-out;
+  }
+  .theme-toggle:hover { background: var(--panel); color: var(--ink); }
+  @media (max-width: 820px) { .nav-links a:not(.btn-black) { display: none; } }
 
   /* ---------- hero ---------- */
-  .hero { position: relative; padding: 92px 0 72px; text-align: center; overflow: hidden; }
+  .hero { position: relative; padding: 88px 0 72px; text-align: center; overflow: hidden; }
   .hero::before {
     content: ""; position: absolute; inset: -20% -10%; pointer-events: none; z-index: 0;
     background:
@@ -93,7 +136,7 @@
   .hero-chip {
     display: inline-flex; align-items: center; gap: 8px;
     font-size: 13px; font-weight: 550; color: var(--ink-soft);
-    background: rgba(255, 255, 255, 0.75); border: 1px solid var(--line);
+    background: var(--chip-bg); border: 1px solid var(--line);
     border-radius: 999px; padding: 6px 16px; margin-bottom: 26px;
     box-shadow: 0 1px 4px rgba(23, 24, 28, 0.05);
   }
@@ -110,14 +153,14 @@
     position: relative; z-index: 1;
     margin-top: 54px;
     border: 1px solid var(--line); border-radius: var(--radius);
-    overflow: hidden; background: #fff;
-    box-shadow: 0 2px 6px rgba(23, 24, 28, 0.06), 0 24px 70px rgba(23, 24, 28, 0.13);
+    overflow: hidden; background: var(--card);
+    box-shadow: var(--hero-shadow);
   }
   .hero-shot img { width: 100%; display: block; }
   .hero-cap { position: relative; z-index: 1; margin-top: 14px; font-size: 13px; color: var(--muted); }
 
   /* ---------- stats ---------- */
-  .stats-outer { border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); background: #fff; }
+  .stats-outer { border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); background: var(--surface); }
   .stats { display: grid; grid-template-columns: repeat(4, 1fr); }
   @media (max-width: 760px) { .stats { grid-template-columns: repeat(2, 1fr); } }
   .stat { padding: 34px 28px; border-left: 1px solid var(--line-soft); }
@@ -144,11 +187,11 @@
   .props { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
   @media (max-width: 880px) { .props { grid-template-columns: 1fr; } }
   .prop {
-    background: #fff; border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
     padding: 26px; box-shadow: var(--card-shadow);
     transition: transform 140ms ease-out, box-shadow 140ms ease-out;
   }
-  .prop:hover { transform: translateY(-2px); box-shadow: 0 2px 6px rgba(23,24,28,0.06), 0 14px 40px rgba(23,24,28,0.1); }
+  .prop:hover { transform: translateY(-2px); }
   .prop .label { display: inline-block; margin-bottom: 12px; }
   .prop h3 { font-size: 18.5px; letter-spacing: -0.015em; margin-bottom: 8px; font-weight: 650; }
   .prop p { font-size: 14.5px; color: var(--ink-soft); }
@@ -157,9 +200,9 @@
   .theater-outer { background: var(--panel); border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); }
   .th-tabs {
     display: flex; gap: 6px; margin: 0 auto 24px; padding: 5px;
-    background: #fff; border: 1px solid var(--line); border-radius: 12px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
     width: max-content; max-width: 100%; overflow-x: auto;
-    box-shadow: 0 1px 3px rgba(23,24,28,0.04);
+    box-shadow: 0 1px 3px rgba(23, 24, 28, 0.04);
   }
   .th-tab {
     border: none; background: transparent; border-radius: 8px;
@@ -170,11 +213,11 @@
   }
   .th-tab span { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
   .th-tab:hover { color: var(--ink); }
-  .th-tab.active { background: var(--black); color: #fff; }
-  .th-tab.active span { color: rgba(255, 255, 255, 0.6); }
+  .th-tab.active { background: var(--btn-bg); color: var(--btn-ink); }
+  .th-tab.active span { color: var(--btn-ink); opacity: 0.55; }
   .th-frame {
     border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
-    background: #fff; box-shadow: var(--card-shadow);
+    background: var(--card); box-shadow: var(--card-shadow);
   }
   .th-frame img { width: 100%; display: block; aspect-ratio: 24/17; object-fit: cover; object-position: top; transition: opacity 180ms ease-out; }
   .th-cap { margin-top: 12px; font-size: 13px; color: var(--muted); text-align: center; }
@@ -183,21 +226,49 @@
   .th-body h3 { font-size: 22px; letter-spacing: -0.018em; margin-bottom: 8px; font-weight: 650; }
   .th-body p { font-size: 15.5px; color: var(--ink-soft); }
 
-  /* ---------- community ---------- */
-  .community { position: relative; overflow: hidden; }
-  .community::before {
-    content: ""; position: absolute; inset: -10%; pointer-events: none; z-index: 0;
-    background:
-      radial-gradient(ellipse 480px 380px at 15% 80%, var(--lav), transparent 70%),
-      radial-gradient(ellipse 520px 400px at 88% 25%, var(--rose), transparent 72%);
-    filter: blur(52px); opacity: 0.7;
+  /* ---------- statement band ---------- */
+  .statement { padding: 84px 0; text-align: center; }
+  .statement p {
+    font-size: clamp(24px, 3vw, 34px); font-weight: 600; letter-spacing: -0.022em;
+    line-height: 1.25; max-width: 24em; margin: 0 auto; color: var(--ink);
   }
-  .community > .wrap { position: relative; z-index: 1; }
+  .statement p em { font-style: normal; color: var(--muted); }
+
+  /* ---------- community ---------- */
+  .community { position: relative; overflow: hidden; padding-top: 0; }
   .res-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
   @media (max-width: 880px) { .res-grid { grid-template-columns: 1fr; } }
 
+  /* ---------- people ---------- */
+  .people { position: relative; overflow: hidden; background: var(--panel); border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); }
+  .people::before {
+    content: ""; position: absolute; inset: -10%; pointer-events: none; z-index: 0;
+    background:
+      radial-gradient(ellipse 480px 380px at 12% 20%, var(--lav), transparent 70%),
+      radial-gradient(ellipse 520px 400px at 90% 75%, var(--rose), transparent 72%);
+    filter: blur(52px); opacity: 0.6;
+  }
+  .people > .wrap { position: relative; z-index: 1; }
+  .people-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; max-width: 760px; margin: 0 auto; }
+  @media (max-width: 700px) { .people-grid { grid-template-columns: repeat(2, 1fr); } }
+  .person {
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 24px 16px 20px; text-align: center; box-shadow: var(--card-shadow);
+  }
+  .pavatar {
+    width: 56px; height: 56px; border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-weight: 650; font-size: 17px; letter-spacing: 0.01em; color: var(--ink);
+    border: 1px solid var(--line); margin-bottom: 12px;
+  }
+  .person:nth-child(3n+1) .pavatar { background: var(--av-lav); }
+  .person:nth-child(3n+2) .pavatar { background: var(--av-rose); }
+  .person:nth-child(3n) .pavatar { background: var(--av-sky); }
+  .person b { display: block; font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
+  .people-note { text-align: center; margin-top: 26px; font-size: 14.5px; color: var(--muted); }
+
   /* ---------- closing CTA ---------- */
-  .closing { position: relative; overflow: hidden; text-align: center; border-top: 1px solid var(--line-soft); }
+  .closing { position: relative; overflow: hidden; text-align: center; }
   .closing::before {
     content: ""; position: absolute; inset: -30% -10%; pointer-events: none; z-index: 0;
     background:
@@ -210,7 +281,7 @@
   .closing p { margin: 16px auto 0; color: var(--ink-soft); font-size: 17px; max-width: 34em; }
 
   /* ---------- footer ---------- */
-  footer { border-top: 1px solid var(--line-soft); padding: 40px 0 52px; font-size: 14px; color: var(--muted); background: #fff; }
+  footer { border-top: 1px solid var(--line-soft); padding: 40px 0 52px; font-size: 14px; color: var(--muted); background: var(--surface); }
   .foot-grid { display: flex; gap: 26px; flex-wrap: wrap; align-items: center; }
   .foot-mark { font-weight: 650; font-size: 16.5px; color: var(--ink); display: flex; align-items: center; gap: 10px; }
   .foot-mark img { width: 19px; height: 19px; }
@@ -222,7 +293,7 @@
   @media (prefers-reduced-motion: reduce) {
     html { scroll-behavior: auto; }
     .reveal { opacity: 1; transform: none; transition: none; }
-    .btn, .prop, .th-tab { transition: none; }
+    .btn, .prop, .th-tab, body { transition: none; }
   }
 </style>
 </head>
@@ -231,13 +302,15 @@
 <header>
   <div class="wrap nav">
     <a class="brand" href="#top">
-      <img src="assets/pm-mate-icon-black.svg" alt="">
+      <img class="logo-dark-invert" src="assets/pm-mate-icon-black.svg" alt="">
       PM-MATE
     </a>
     <nav class="nav-links">
       <a href="#platform">Platform</a>
       <a href="#community">Community</a>
+      <a href="#people">People</a>
       <a href="https://github.com/ercis/MATE">GitHub</a>
+      <button class="theme-toggle" id="theme-toggle" aria-label="Toggle color theme">☾</button>
       <a class="btn btn-black" href="https://pm-mate.uni-muenster.de">Open PM-MATE</a>
     </nav>
   </div>
@@ -249,7 +322,7 @@
   <div class="hero">
     <div class="wrap">
       <span class="hero-chip"><span class="dot"></span> A modular process mining platform</span>
-      <h1>Share your work with the process mining community.</h1>
+      <h1>Share your work with the process science community.</h1>
       <p class="sub">PM-MATE runs in the browser: analysts upload event logs and work with research-backed modules, researchers publish their methods as modules that anyone can run. One platform, both sides of the field.</p>
       <div class="cta-row">
         <a class="btn btn-black" href="https://pm-mate.uni-muenster.de">Open PM-MATE</a>
@@ -265,9 +338,9 @@
   <!-- ================= STATS ================= -->
   <div class="stats-outer">
     <div class="wrap stats">
-      <div class="stat reveal"><b>12</b><span>analysis modules, seven of them implementing published research</span></div>
+      <div class="stat reveal"><b>17</b><span>analysis modules, most backed by published research</span></div>
       <div class="stat reveal"><b>3</b><span>event log formats: XES, CSV, and OCEL</span></div>
-      <div class="stat reveal"><b>5</b><span>process model notations, from directly-follows graphs to BPMN</span></div>
+      <div class="stat reveal"><b>2</b><span>module runtimes, Python and JVM, each with a typed SDK</span></div>
       <div class="stat reveal"><b>0</b><span>restarts needed to install a new module</span></div>
     </div>
   </div>
@@ -330,6 +403,13 @@
   </section>
   </div>
 
+  <!-- ================= STATEMENT ================= -->
+  <section class="statement">
+    <div class="wrap reveal">
+      <p>Code becomes a tool the moment someone else can run it. <em>PM-MATE is where that happens.</em></p>
+    </div>
+  </section>
+
   <!-- ================= COMMUNITY ================= -->
   <section id="community" class="community">
     <div class="wrap">
@@ -341,13 +421,13 @@
       <div class="res-grid">
         <div class="prop reveal">
           <span class="label">SDK</span>
-          <h3>A typed SDK on both ends</h3>
-          <p>Write the analysis against <code>mate.sdk</code> in Python and the optional panel against <code>@mate/module-sdk</code> in TypeScript. Every module gets its own virtual environment, resolved at install time.</p>
+          <h3>Typed SDKs for Python and the JVM</h3>
+          <p>Write against <code>mate.sdk</code> in Python or <code>mate-sdk-jvm</code> in Java. Each Python module gets its own virtual environment. JVM modules ship as one self-contained jar.</p>
         </div>
         <div class="prop reveal">
           <span class="label">Runtime</span>
-          <h3>Isolated where it counts</h3>
-          <p>Modules run in-process or as supervised subprocess workers in their own environment, with cooperative cancellation and live job logs. They talk to the platform through an event bus and typed capabilities.</p>
+          <h3>Sandboxed by default</h3>
+          <p>Modules run in-process or as supervised subprocess workers with hard timeouts and cancellation. They communicate through an event bus and typed capabilities.</p>
         </div>
         <div class="prop reveal">
           <span class="label">Credit</span>
@@ -358,11 +438,36 @@
     </div>
   </section>
 
+  <!-- ================= PEOPLE ================= -->
+  <div class="people">
+  <section id="people">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <span class="label">People</span>
+        <h2>Built for the people who study processes and the people who run them.</h2>
+        <p>PM-MATE is open to everyone who works with processes, whether they write methods or apply them. These are the people behind the platform and its first modules.</p>
+      </div>
+      <div class="people-grid reveal">
+        <div class="person"><span class="pavatar">SF</span><b>Sandro Franzoi</b></div>
+        <div class="person"><span class="pavatar">PB</span><b>Paul Brützke</b></div>
+        <div class="person"><span class="pavatar">JB</span><b>Jan vom Brocke</b></div>
+        <div class="person"><span class="pavatar">JM</span><b>Jan Mendling</b></div>
+        <div class="person"><span class="pavatar">HA</span><b>Han van der Aa</b></div>
+        <div class="person"><span class="pavatar">TZ</span><b>Tobias Zimmermann</b></div>
+        <div class="person"><span class="pavatar">YB</span><b>Yannick Brusa</b></div>
+        <div class="person"><span class="pavatar">FK</span><b>Finn Klessascheck</b></div>
+        <div class="person"><span class="pavatar">PM</span><b>Philipp Michels</b></div>
+      </div>
+      <p class="people-note reveal">Ship a module and your name joins this list.</p>
+    </div>
+  </section>
+  </div>
+
   <!-- ================= CLOSING CTA ================= -->
   <section class="closing">
     <div class="wrap">
       <div class="reveal">
-        <h2>Bring your method to the community.</h2>
+        <h2>Bring your method into application.</h2>
         <p>PM-MATE runs online. Open the platform, import an event log, and see your process in minutes.</p>
         <div class="cta-row">
           <a class="btn btn-black" href="https://pm-mate.uni-muenster.de">Open PM-MATE</a>
@@ -378,14 +483,14 @@
   <div class="wrap">
     <div class="foot-grid">
       <span class="foot-mark">
-        <img src="assets/pm-mate-icon-black.svg" alt="">
+        <img class="logo-dark-invert" src="assets/pm-mate-icon-black.svg" alt="">
         PM-MATE
       </span>
       <nav class="foot-links">
         <a href="https://pm-mate.uni-muenster.de">Open PM-MATE</a>
         <a href="https://github.com/ercis/MATE">GitHub</a>
         <a href="#platform">Platform</a>
-        <a href="#community">Community</a>
+        <a href="#people">People</a>
       </nav>
     </div>
     <p class="colophon">Built at the University of Münster · © 2026 PM-MATE</p>
@@ -393,17 +498,31 @@
 </footer>
 
 <script>
-  /* Screenshots land in assets/ as they are captured - see landing/README.md.
-     Until one exists, show a labelled placeholder instead of a broken image. */
+  /* theme: system default, manual override persisted */
   (function () {
-    function fallback(img) {
-      if (img.dataset.fellBack) return;
-      img.dataset.fellBack = '1';
-      img.src = 'assets/placeholder.svg';
+    var root = document.documentElement;
+    var btn = document.getElementById('theme-toggle');
+    var stored = null;
+    try { stored = localStorage.getItem('pmmate-theme'); } catch (e) {}
+    function systemDark() { return window.matchMedia('(prefers-color-scheme: dark)').matches; }
+    function apply(theme) {
+      root.classList.add('theme-snap');
+      if (theme === 'dark') { root.setAttribute('data-theme', 'dark'); }
+      else { root.removeAttribute('data-theme'); }
+      if (btn) btn.textContent = theme === 'dark' ? '☀' : '☾';
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { root.classList.remove('theme-snap'); });
+      });
     }
-    document.querySelectorAll('.hero-shot img, .th-frame img').forEach(function (img) {
-      img.addEventListener('error', function () { fallback(img); });
-      if (img.complete && img.naturalWidth === 0) fallback(img);
+    var current = stored || (systemDark() ? 'dark' : 'light');
+    apply(current);
+    if (btn) btn.addEventListener('click', function () {
+      current = current === 'dark' ? 'light' : 'dark';
+      try { localStorage.setItem('pmmate-theme', current); } catch (e) {}
+      apply(current);
+    });
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function (e) {
+      if (!stored) { current = e.matches ? 'dark' : 'light'; apply(current); }
     });
   })();
 
@@ -449,9 +568,9 @@
       },
       {
         shot: 'assets/shot-mate-ai.png', pos: 'top',
-        capb: 'MATE AI', cap: 'beside the process overview. Its context is built from module outputs, not from the event store.',
-        title: 'An assistant that reads results, not raw data',
-        desc: 'A context-aware assistant on every page: summarize a process, walk through a variant, find bottlenecks. Its prompt context is assembled from cached module outputs under a fixed budget, so raw event rows never leave your instance. Modules that do call an external model are flagged in the library.'
+        capb: 'MATE AI', cap: 'beside the process overview. It sees aggregates on screen and none of the raw events.',
+        title: 'An assistant behind a data wall',
+        desc: 'A context-aware assistant on every page: summarize a process, walk through a variant, find bottlenecks. It reads the aggregates already on your screen, and a strict data wall keeps raw event data out of every prompt.'
       }
     ];
     var tabs = Array.prototype.slice.call(document.querySelectorAll('.th-tab'));
@@ -467,7 +586,6 @@
       tabs.forEach(function (t, i) { t.classList.toggle('active', i === idx); t.setAttribute('aria-selected', i === idx ? 'true' : 'false'); });
       img.style.opacity = '0';
       setTimeout(function () {
-        delete img.dataset.fellBack;
         img.src = s.shot;
         img.style.objectPosition = s.pos;
         capb.textContent = s.capb;
@@ -479,6 +597,20 @@
     }
     tabs.forEach(function (t) {
       t.addEventListener('click', function () { activate(Number(t.dataset.i)); });
+    });
+  })();
+
+  /* Screenshots land in assets/ as they are captured - see landing/README.md.
+     Until one exists, show a labelled placeholder instead of a broken image. */
+  (function () {
+    function fallback(img) {
+      if (img.dataset.fellBack) return;
+      img.dataset.fellBack = '1';
+      img.src = 'assets/placeholder.svg';
+    }
+    document.querySelectorAll('.hero-shot img, .th-frame img').forEach(function (img) {
+      img.addEventListener('error', function () { fallback(img); });
+      if (img.complete && img.naturalWidth === 0) fallback(img);
     });
   })();
 </script>
