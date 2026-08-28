@@ -80,11 +80,16 @@ function rolesFromAccessToken(accessToken: string | undefined): string[] {
 const KEYCLOAK_ISSUER = process.env.KEYCLOAK_ISSUER ?? "http://localhost:8080/realms/flows-funds";
 const KEYCLOAK_CLIENT_ID = process.env.KEYCLOAK_CLIENT_ID ?? "flows-funds-web";
 const KEYCLOAK_CLIENT_SECRET = process.env.KEYCLOAK_CLIENT_SECRET ?? "";
-// When set to a brokered IdP alias (e.g. "keycloak-oidc"), we pass kc_idp_hint on
-// the authorize request so Keycloak skips its own login form and redirects
-// straight to that IdP. Leave empty to show Keycloak's local login form (also
-// the break-glass path for the admin@flows-funds.local account).
-const KEYCLOAK_IDP_HINT = process.env.KEYCLOAK_IDP_HINT ?? "";
+// When set to a brokered IdP alias (e.g. "keycloak-oidc"), kc_idp_hint is added
+// to the authorize request so Keycloak skips its own login form and redirects
+// straight to that IdP.
+//
+// It is deliberately NOT declared on the provider below: a provider-level
+// authorization param is unconditional, so it left no way to reach Keycloak's
+// own username/password form - locking out every local realm account. It is
+// instead passed per sign-in by GET /login/start, which omits it for `?local=1`
+// (the "Sign in with a Mate account" link). Exported for that route.
+export const KEYCLOAK_IDP_HINT = process.env.KEYCLOAK_IDP_HINT ?? "";
 // Optional internal back-channel base URL for Keycloak, e.g.
 // "http://keycloak:8080/auth/realms/flows-funds". When set, the SERVER-SIDE
 // OIDC calls (discovery, code->token, userinfo, and the refresh in
@@ -245,17 +250,9 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
             userinfo: `${KEYCLOAK_INTERNAL_URL}/protocol/openid-connect/userinfo`,
           }
         : {}),
-      // Forward kc_idp_hint so Keycloak redirects straight to the brokered IdP
-      // (no Keycloak login page). Only added when KEYCLOAK_IDP_HINT is set; we
-      // re-declare the default OIDC scope here so adding `params` doesn't drop
-      // it.
-      ...(KEYCLOAK_IDP_HINT
-        ? {
-            authorization: {
-              params: { scope: "openid email profile", kc_idp_hint: KEYCLOAK_IDP_HINT },
-            },
-          }
-        : {}),
+      // kc_idp_hint is NOT set here on purpose – see KEYCLOAK_IDP_HINT above.
+      // /login/start passes it per request, which keeps the provider's default
+      // OIDC scope intact and leaves a route to Keycloak's own login form.
     }),
     // Demo bypass – only registered when DEMO_MODE is on. No credentials are
     // checked; it always returns the same fixed demo user.

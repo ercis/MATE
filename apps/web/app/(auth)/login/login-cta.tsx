@@ -15,10 +15,11 @@ import { Button } from "@/components/ui/button";
  * shows no sign the click registered. `pageshow` resets the state so a bfcache
  * restore (back button from the IdP) doesn't resurrect a stale spinner.
  */
-export function LoginCta({ href, label, pendingLabel }: {
+export function LoginCta({ href, label, pendingLabel, variant = "default" }: {
   href: string;
   label: string;
   pendingLabel: string;
+  variant?: "default" | "ghost";
 }) {
   const [pending, setPending] = useState(false);
 
@@ -29,7 +30,7 @@ export function LoginCta({ href, label, pendingLabel }: {
   }, []);
 
   return (
-    <Button asChild className="w-full" size="lg">
+    <Button asChild variant={variant} className="w-full" size="lg">
       <a href={href} aria-busy={pending} onClick={() => setPending(true)}>
         {pending ? (
           <>
