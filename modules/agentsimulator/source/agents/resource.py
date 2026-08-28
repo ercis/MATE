@@ -1,9 +1,10 @@
-import pandas as pd
 from datetime import datetime
+
+import pandas as pd
 import pytz
 from mesa import Agent
-
 from source.utils import sample_from_distribution
+
 
 class ResourceAgent(Agent):
     """

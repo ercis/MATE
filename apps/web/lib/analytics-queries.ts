@@ -12,6 +12,11 @@ export interface AnalyticsConfig {
   capture_clicks: boolean;
   capture_perf: boolean;
   capture_errors: boolean;
+  // UI-log capture kinds (Abb & Rehse model): committed input values,
+  // keyboard combos, and sampled pointer traces / scroll depth.
+  capture_inputs: boolean;
+  capture_keyboard: boolean;
+  capture_pointer: boolean;
   opted_in_at: string | null;
   anon_user_id_seed: string;
   // Server-side policy from USER_TRACKING_ONBOARDING; read-only on the client.

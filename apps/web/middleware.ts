@@ -5,7 +5,9 @@ import type { NextRequest } from "next/server";
 // We can't decode the session here – with the server-side store (Option 3) the
 // token lives on disk, unreachable from the Edge runtime. Real validation
 // happens server-side: RSCs via `auth()` (Node runtime) and the API via JWKS.
-const PUBLIC_PATHS = ["/login", "/api/auth"];
+// /logout must stay public: it's the escape hatch that clears a wedged session
+// cookie, so it has to run even when the gate would otherwise interfere.
+const PUBLIC_PATHS = ["/login", "/logout", "/api/auth"];
 const SESSION_COOKIES = ["authjs.session-token", "__Secure-authjs.session-token"];
 
 export default function middleware(req: NextRequest) {

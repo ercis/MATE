@@ -3,7 +3,6 @@ from datetime import datetime
 import pandas as pd
 
 from source.extraneous_delays.availability import get_last_available_timestamp
-
 from source.extraneous_delays.concurrency_oracle import Configuration
 
 
@@ -80,7 +79,7 @@ class SimpleResourceAvailability(ResourceAvailability):
                 config.log_ids.end_time
             ]
         # Super
-        super(SimpleResourceAvailability, self).__init__(resources_calendar, {}, config)
+        super().__init__(resources_calendar, {}, config)
 
 
 class CalendarResourceAvailability(ResourceAvailability):
@@ -93,4 +92,4 @@ class CalendarResourceAvailability(ResourceAvailability):
                 config.log_ids.end_time
             ]
         # Super
-        super(CalendarResourceAvailability, self).__init__(resources_calendar, config.working_schedules, config)
+        super().__init__(resources_calendar, config.working_schedules, config)

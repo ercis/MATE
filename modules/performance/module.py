@@ -72,13 +72,10 @@ async def _per_activity_sojourn(df: Any, freq_rows: list[tuple]) -> list[dict[st
     """
 
     def _run() -> dict[str, list[float]]:
-        import pandas as pd
 
         sorted_df = df.sort_values(["case_id", "timestamp"])
         sorted_df["next_ts"] = sorted_df.groupby("case_id")["timestamp"].shift(-1)
-        sorted_df["sojourn_s"] = (
-            (sorted_df["next_ts"] - sorted_df["timestamp"]).dt.total_seconds()
-        )
+        sorted_df["sojourn_s"] = (sorted_df["next_ts"] - sorted_df["timestamp"]).dt.total_seconds()
         valid = sorted_df.dropna(subset=["sojourn_s"])
         out: dict[str, list[float]] = {}
         for activity, group in valid.groupby("activity"):
@@ -233,7 +230,8 @@ class PerformanceModule(Module):
                         "frequency": item["frequency"],
                         "avg_sojourn_s": item["avg_sojourn_s"],
                         "p90_sojourn_s": item["p90_sojourn_s"],
-                        "share_of_total_time": (item["avg_sojourn_s"] * item["frequency"]) / total_time,
+                        "share_of_total_time": (item["avg_sojourn_s"] * item["frequency"])
+                        / total_time,
                         "histogram": histogram,
                     }
                 )
@@ -262,6 +260,7 @@ class PerformanceModule(Module):
                     activities[a] = max(activities.get(a, 0), int(freq))
                 for a, freq in end.items():
                     activities[a] = max(activities.get(a, 0), int(freq))
+
                 def _perf_to_seconds(p: Any) -> float:
                     # pm4py returns either a scalar mean, or a dict of stats
                     # (mean / median / stdev / min / max / sum) depending on

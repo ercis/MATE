@@ -235,19 +235,25 @@ def serialize_heuristics_net(hnet: Any) -> dict[str, Any]:
 
     def _flatten(d: Any) -> dict[str, int]:
         if isinstance(d, dict):
-            return {k: int(v) if not isinstance(v, dict) else int(sum(v.values())) for k, v in d.items()}
+            return {
+                k: int(v) if not isinstance(v, dict) else int(sum(v.values())) for k, v in d.items()
+            }
         if isinstance(d, list):
             out: dict[str, int] = {}
             for item in d:
                 if isinstance(item, dict):
                     for k, v in item.items():
-                        out[k] = out.get(k, 0) + int(v if not isinstance(v, dict) else sum(v.values()))
+                        out[k] = out.get(k, 0) + int(
+                            v if not isinstance(v, dict) else sum(v.values())
+                        )
             return out
         return {}
 
     return {
         "kind": "heuristics_net",
-        "activities": [{"id": a, "label": a, "frequency": int(occ)} for a, occ in occurrences.items()],
+        "activities": [
+            {"id": a, "label": a, "frequency": int(occ)} for a, occ in occurrences.items()
+        ],
         "edges": edges,
         "start_activities": _flatten(getattr(hnet, "start_activities", {}) or {}),
         "end_activities": _flatten(getattr(hnet, "end_activities", {}) or {}),

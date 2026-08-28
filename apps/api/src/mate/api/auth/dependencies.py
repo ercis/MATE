@@ -152,12 +152,19 @@ async def _jit_sync_user(session: AsyncSession, user: CurrentUser) -> None:
     get_settings().ensure_user_dirs(user.id)
 
 
-async def get_current_user_from_token(token: str, session: AsyncSession) -> CurrentUser:
+async def get_current_user_and_claims(
+    token: str, session: AsyncSession
+) -> tuple[CurrentUser, dict[str, object]]:
+    """Resolve the user AND return the verified JWT claims.
+
+    The MCP OAuth path maps the token's ``scope`` claim onto MCP scopes, so it
+    needs the claims alongside the user. The demo bypass returns empty claims.
+    """
     settings = get_settings()
     if settings.demo_mode and token == DEMO_ACCESS_TOKEN:
         user = replace(DEMO_USER, roles=("admin",)) if settings.demo_admin else DEMO_USER
         await _jit_sync_user(session, user)
-        return user
+        return user, {}
     claims = await _decode_token(token)
     sub = _claim_str(claims, "sub")
     if not sub:
@@ -170,6 +177,11 @@ async def get_current_user_from_token(token: str, session: AsyncSession) -> Curr
         roles=_extract_roles(claims),
     )
     await _jit_sync_user(session, user)
+    return user, claims
+
+
+async def get_current_user_from_token(token: str, session: AsyncSession) -> CurrentUser:
+    user, _claims = await get_current_user_and_claims(token, session)
     return user
 
 
@@ -204,6 +216,17 @@ async def require_admin(user: CurrentUserDep) -> CurrentUser:
 
 
 AdminUserDep = Annotated[CurrentUser, Depends(require_admin)]
+
+
+def evict_user_from_jit_cache(user_id: str) -> None:
+    """Forget *user_id* from the JIT-sync cache.
+
+    ``_jit_sync_user`` short-circuits on a cached id, so after a user's row is
+    deleted their id MUST be evicted - otherwise a re-login with the same
+    Keycloak ``sub`` skips re-creating the ``users`` row (and its on-disk dirs),
+    leaving a valid-token user with no row that 500s on every insert.
+    """
+    _seen_user_ids.discard(user_id)
 
 
 def reset_user_cache_for_tests() -> None:  # pragma: no cover - test helper

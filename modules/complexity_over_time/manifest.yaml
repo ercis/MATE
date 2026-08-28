@@ -1,13 +1,27 @@
 id: complexity_over_time
-name: Complexity over time
+name: Complexity Over Time
 version: 1.0.0
 category: advanced
 description: >-
   Tracks how your process complexity changes over time. It splits the log into
   time slices, scores each one, and plots the trend so you can see when the
   process became simpler or more chaotic. Based on paper by Augusto et al.
+about: >-
+  Watch process complexity as a trend instead of a snapshot: the log is split
+  into time slices and each slice is scored, so you can see exactly when your
+  process became simpler or more chaotic. Use it to verify that a redesign or
+  automation rollout actually simplified day-to-day work, and to catch creeping
+  complexity (new variants, workarounds) before it hurts performance.
 keywords: ["complexity over time", "complexity trend", "entropy over time", "complexity timeline", "kpi over time"]
-author: FlowFactory
+source:
+  - title: >-
+      The connection between process complexity of event sequences and models
+      discovered by process mining
+    fullCitation: >-
+      A. Augusto, J. Mendling, M. Vidgof, and B. Wurm, "The connection between
+      process complexity of event sequences and models discovered by process
+      mining," Inf. Sci., vol. 598, pp. 196-215, 2022
+    url: https://doi.org/10.1016/j.ins.2022.03.072
 license: MIT
 default_enabled: true
 # Runs entirely locally – safe to use against confidential event logs.
@@ -49,9 +63,9 @@ frontend:
       title: Complexity trend
       description: A complexity metric plotted over evenly-sized time slices.
       icon: TrendingUp
-      default_w: 8
+      default_w: 4
       default_h: 8
-      min_w: 6
+      min_w: 3
       min_h: 6
       config_schema:
         properties:
@@ -90,7 +104,12 @@ frontend:
             default: 12
             ui:
               widget: slider
-
+      min_px_w: 320
+      min_px_h: 220
+      help:
+        what: "How process complexity changes over time."
+        read: "A rising line means the process is drifting toward more variation — often worth investigating before it becomes normal."
+        computed: "Complexity measures recomputed per time slice."
 permissions:
   - read:event_log
   - write:module_results

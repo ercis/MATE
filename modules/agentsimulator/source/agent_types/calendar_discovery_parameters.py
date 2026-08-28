@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+
 
 class Method(Enum):
     TRAPEZOIDAL = 0
@@ -74,20 +74,20 @@ class CalendarType(str, Enum):
             return "differentiated_by_resource"
         elif self == CalendarType.DIFFERENTIATED_BY_RESOURCE_FUZZY:
             return "differentiated_by_resource_fuzzy"
-        return f"Unknown CalendarType {str(self)}"
+        return f"Unknown CalendarType {self!s}"
 
 
 @dataclass
 class CalendarDiscoveryParameters:
     discovery_type: CalendarType = CalendarType.UNDIFFERENTIATED #CalendarType.UNDIFFERENTIATED
-    granularity: Optional[int] = 60  # minutes per granule
-    confidence: Optional[float] = 0.1  # from 0 to 1.0
-    support: Optional[float] = 0.1  # from 0 to 1.0
-    participation: Optional[float] = 0.4  # from 0 to 1.0
+    granularity: int | None = 60  # minutes per granule
+    confidence: float | None = 0.1  # from 0 to 1.0
+    support: float | None = 0.1  # from 0 to 1.0
+    participation: float | None = 0.4  # from 0 to 1.0
 
     # Parameters unique to fuzzy calendars (it uses granularity too)
-    fuzzy_method: Optional[Method] = Method.TRAPEZOIDAL
-    fuzzy_angle: Optional[float] = 1.0
+    fuzzy_method: Method | None = Method.TRAPEZOIDAL
+    fuzzy_angle: float | None = 1.0
 
     def to_dict(self) -> dict:
         calendar_discovery_params = {"discovery_type": self.discovery_type.value}

@@ -6,10 +6,11 @@ A watched folder is a persistent, auto-scanned import source - see
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from mate.api.schemas.common import UtcDateTime
 
 WatchMode = Literal["manual", "interval", "continuous"]
 WatchStatus = Literal["active", "paused", "error"]
@@ -57,9 +58,9 @@ class WatchedFolderSummary(BaseModel):
     interval_seconds: int | None = None
     status: WatchStatus | str
     dest_folder_id: str | None = None
-    last_scanned_at: datetime | None = None
+    last_scanned_at: UtcDateTime | None = None
     last_error: str | None = None
-    created_at: datetime
+    created_at: UtcDateTime
     # Ledger rollup (filled by the route, not the ORM).
     imported_count: int = 0
     failed_count: int = 0
@@ -73,7 +74,7 @@ class WatchedFileSummary(BaseModel):
     size: int | None = None
     log_id: str | None = None
     error: str | None = None
-    imported_at: datetime
+    imported_at: UtcDateTime
 
 
 class WatchedFolderDetail(WatchedFolderSummary):

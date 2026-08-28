@@ -2,9 +2,10 @@ import { redirect } from "next/navigation";
 
 import { auth, signIn, DEMO_MODE } from "@/auth";
 import { ThemeToggleButton } from "@/components/theme-toggle-button";
-import { Button } from "@/components/ui/button";
-import { clearAuthCookies } from "@/lib/clear-session";
+import { MateLogo } from "@/components/mate-logo";
+import { BorderBeam } from "@/components/glass/border-beam";
 import { DemoAutoSignIn } from "./demo-auto-signin";
+import { LoginCta, DemoSubmitButton } from "./login-cta";
 import { RecoveryAutoRetry } from "./recovery-auto-retry";
 
 export default async function LoginPage({
@@ -24,26 +25,26 @@ export default async function LoginPage({
   // A refresh-failed session keeps a valid-looking cookie, so `auth()` (here and
   // in the platform layout) keeps returning it and bouncing back to /login – and
   // a server `redirect()` can't delete the cookie, so it never recovers (the
-  // lock-in). Break it: the login action wipes the stale cookie before a fresh
+  // lock-in). Break it: /login/start wipes the stale cookie before a fresh
   // OAuth round-trip, and `prompt=login` forces Keycloak → the university IdP to
   // re-authenticate rather than silently reissue a session tied to the dead one.
+  //
+  // The CTA is a plain link (GET /login/start), not a server action: after
+  // hydration a server action submits over fetch(), which dies under the same
+  // fetch-layer interception (content blocker / stale service worker) that
+  // strands Safari in the login loop. A navigation always works.
   const staleSession = session?.error === "RefreshAccessTokenError";
-
-  async function startKeycloakLogin() {
-    "use server";
-    await clearAuthCookies();
-    await signIn(
-      "keycloak",
-      { redirectTo: callbackUrl },
-      staleSession ? { prompt: "login" } : undefined,
-    );
-  }
+  const startUrl = `/login/start?callbackUrl=${encodeURIComponent(callbackUrl)}${
+    staleSession ? "&prompt=login" : ""
+  }`;
 
   return (
-    <div className="relative w-full max-w-sm space-y-6 rounded-2xl border border-border bg-card p-8 shadow-sm">
+    <div className="relative z-10 w-full max-w-sm space-y-6 rounded-2xl border border-white/15 [border-top-color:var(--glass-refraction-top)] bg-card/70 p-8 shadow-xl backdrop-blur-2xl backdrop-saturate-150 supports-[backdrop-filter]:bg-card/60">
+      <BorderBeam className="rounded-2xl" />
       <ThemeToggleButton className="absolute right-4 top-4 h-8 w-8 cursor-pointer text-muted-foreground" />
       <div className="space-y-2 text-center">
-        <h1 className="text-2xl font-semibold">Mate</h1>
+        <MateLogo className="mx-auto h-11 w-11 text-foreground" />
+        <h1 className="text-2xl font-semibold">PM-MATE</h1>
         <p className="text-sm text-muted-foreground">
           {DEMO_MODE
             ? "Demo mode – signing you in…"
@@ -61,22 +62,20 @@ export default async function LoginPage({
               await signIn("demo", { redirectTo: callbackUrl });
             }}
           >
-            <Button type="submit" className="w-full" size="lg">
-              Enter demo workspace
-            </Button>
+            <DemoSubmitButton label="Enter demo workspace" pendingLabel="Entering…" />
           </form>
         </>
       ) : (
         <>
-          {/* Dead refresh token → auto-submit once to recover hands-free; the
+          {/* Dead refresh token → auto-navigate once to recover hands-free; the
               one-shot guard inside stops a failing OAuth from looping and leaves
-              the manual button as the fallback. */}
-          {staleSession ? <RecoveryAutoRetry formId="login-form" /> : null}
-          <form id="login-form" action={startKeycloakLogin}>
-            <Button type="submit" className="w-full" size="lg">
-              {staleSession ? "Sign in again" : "Login with university account"}
-            </Button>
-          </form>
+              the manual link as the fallback. */}
+          {staleSession ? <RecoveryAutoRetry href={startUrl} /> : null}
+          <LoginCta
+            href={startUrl}
+            label={staleSession ? "Sign in again" : "Login with university account"}
+            pendingLabel="Signing in…"
+          />
         </>
       )}
     </div>

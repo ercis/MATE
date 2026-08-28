@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { StatusBadge } from "@/components/status-badge";
 import { JobChildRow, PrecomputeStepRow } from "@/components/jobs/job-child-row";
+import { useModuleNames } from "@/lib/queries";
 import { parseJobTitle, type JobGroup } from "@/lib/stores/jobs";
 import { cn } from "@/lib/cn";
 
@@ -24,6 +25,9 @@ interface JobGroupCardProps {
  */
 export function JobGroupCard({ group, expanded, onToggle }: JobGroupCardProps) {
   const { parent, children, steps, done, total } = group;
+  // Resolved once per group, not per row - keeps the `GET /modules` fetch scoped
+  // to "the drawer is open and there is a group", never firing from its shell.
+  const moduleName = useModuleNames();
   const pct = total > 0 ? Math.min(100, Math.floor((done / total) * 100)) : 0;
   const hasRows = steps ? steps.length > 0 : children.length > 0;
   const { name: cleanTitle, badge } = parseJobTitle(parent);
@@ -81,8 +85,9 @@ export function JobGroupCard({ group, expanded, onToggle }: JobGroupCardProps) {
                   <PrecomputeStepRow
                     key={step.moduleId}
                     moduleId={step.moduleId}
+                    name={moduleName(step.moduleId)}
                     state={step.state as "waiting" | "skipped"}
-                    waitingOn={step.waitingOn}
+                    waitingOnNames={step.waitingOn.map(moduleName)}
                   />
                 ),
               )

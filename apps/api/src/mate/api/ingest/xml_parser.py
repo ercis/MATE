@@ -154,6 +154,35 @@ def _pick_event_element(root: etree._Element) -> str | None:
     return counts.most_common(1)[0][0]
 
 
+def sample_xml_events(
+    path: Path,
+    *,
+    max_events: int = 200,
+) -> tuple[list[dict[str, str]], str | None]:
+    """Flatten the first ``max_events`` event elements into records.
+
+    Returns ``(records, event_element)``. Shared by :func:`probe_xml` (which
+    reduces the records to per-field coverage) and the import wizard's probe
+    (which needs the raw sample for the column-role heuristics).
+    """
+    tree = etree.parse(str(path))
+    root = tree.getroot()
+    target = _pick_event_element(root)
+    if target is None:
+        return [], None
+
+    records: list[dict[str, str]] = []
+    for elem in root.iter():
+        if not isinstance(elem, etree._Element):
+            continue
+        if _localname(elem.tag) != target:
+            continue
+        records.append(_event_fields(elem))
+        if len(records) >= max_events:
+            break
+    return records, target
+
+
 def probe_xml(
     path: Path,
     *,
@@ -189,9 +218,7 @@ def probe_xml(
         return {"format_hint": "ocel", "event_element": None, "events_sampled": 0, "fields": []}
     if is_xes_like(path):
         return {"format_hint": "xes", "event_element": "event", "events_sampled": 0, "fields": []}
-    tree = etree.parse(str(path))
-    root = tree.getroot()
-    target = _pick_event_element(root)
+    records, target = sample_xml_events(path, max_events=max_events)
     if target is None:
         return {
             "format_hint": "generic",
@@ -202,21 +229,13 @@ def probe_xml(
 
     samples: dict[str, list[str]] = {}
     presence: Counter[str] = Counter()
-    seen = 0
-    for elem in root.iter():
-        if not isinstance(elem, etree._Element):
-            continue
-        if _localname(elem.tag) != target:
-            continue
-        fields = _event_fields(elem)
+    for fields in records:
         for name, value in fields.items():
             presence[name] += 1
             bucket = samples.setdefault(name, [])
             if len(bucket) < 3 and value not in bucket:
                 bucket.append(value)
-        seen += 1
-        if seen >= max_events:
-            break
+    seen = len(records)
 
     fields_summary = [
         {
@@ -428,4 +447,5 @@ __all__ = [
     "is_xes_like",
     "parse_xml",
     "probe_xml",
+    "sample_xml_events",
 ]

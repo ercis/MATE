@@ -2,15 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import {
-  ArrowLeft,
-  FolderClock,
-  Loader2,
-  Pause,
-  Play,
-  RefreshCw,
-  Trash2,
-} from "lucide-react";
+import { FolderClock, Loader2, Pause, Play, RefreshCw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -27,12 +19,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { EmptyState } from "@/components/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  PageContainer,
-  PageHeader,
-  PageTitle,
-  PageDescription,
-} from "@/components/page";
+import { PageContainer, PageHeader } from "@/components/page";
 import { toastError } from "@/lib/toast";
 import {
   useDeleteWatchedFolder,
@@ -67,20 +54,7 @@ export default function WatchedFoldersPage() {
 
   return (
     <PageContainer>
-      <PageHeader>
-        <div className="space-y-1">
-          <Link
-            href="/processes"
-            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-          >
-            <ArrowLeft className="h-3 w-3" /> Processes
-          </Link>
-          <PageTitle>Watched folders</PageTitle>
-          <PageDescription>
-            Storage locations scanned for new event-log files. New files are imported
-            automatically.
-          </PageDescription>
-        </div>
+      <PageHeader className="justify-end">
         <Button asChild className="gap-2 cursor-pointer">
           <Link href="/processes/import">
             <RefreshCw className="h-4 w-4" />
@@ -90,7 +64,7 @@ export default function WatchedFoldersPage() {
       </PageHeader>
 
       {isLoading && (
-        <div className="space-y-2">
+        <div className="space-y-3">
           {Array.from({ length: 3 }).map((_, i) => (
             <Skeleton key={i} className="h-24 w-full" />
           ))}

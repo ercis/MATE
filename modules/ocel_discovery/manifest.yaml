@@ -5,8 +5,20 @@ category: foundation
 description: >-
   Discovers a process from object-centric (OCEL) logs, showing the object types,
   the activities, and the object-centric directly-follows graph (OC-DFG).
+about: >-
+  Explore processes where several object types (orders, items, invoices, ...)
+  interact: this module discovers the object-centric directly-follows graph and
+  Petri net straight from your OCEL log. Use it to see which activities touch
+  which object types, how objects flow through the process, and how long each
+  object type's lifecycle takes - without forcing everything into a single case
+  notion.
 keywords: ["object-centric", "object centric", "ocel", "oc-dfg", "object types", "ocpm"]
-author: FlowFactory
+source:
+  - title: "PM4Py: A process mining library for Python"
+    fullCitation: >-
+      A. Berti, S. van Zelst, and D. Schuster, "PM4Py: A process mining library
+      for Python," Softw. Impacts, vol. 17, 100556, 2023
+    url: https://doi.org/10.1016/j.simpa.2023.100556
 license: MIT
 default_enabled: true
 # Runs entirely locally – safe to use against confidential event logs.
@@ -49,42 +61,65 @@ frontend:
       title: Object types
       description: Object types and per-type counts of the OCEL log.
       icon: Layers
-      default_w: 7
+      default_w: 4
       default_h: 8
-      min_w: 6
+      min_w: 3
       min_h: 7
       log_models: [object_centric]
+      min_px_w: 280
+      min_px_h: 200
+      help:
+        what: "The object types in this OCEL log and how many of each there are."
+        read: "Object counts that are wildly uneven usually indicate a dominant entity the process really revolves around."
+        computed: "Counted directly from the object-centric log."
     - id: ocdfg
       entry: ./widgets/Ocdfg.tsx
       title: Object-centric DFG
       description: Directly-follows graph per object type (OC-DFG).
       icon: Network
-      default_w: 6
+      default_w: 3
       default_h: 10
-      min_w: 5
+      min_w: 3
       min_h: 8
       log_models: [object_centric]
+      min_px_w: 340
+      min_px_h: 280
+      help:
+        what: "The object-centric directly-follows graph: how activities relate per object type."
+        read: "Each object type traces its own path; where they cross is where the process synchronises."
+        computed: "Built from the filtered OCEL log."
     - id: activity-object-types
       entry: ./widgets/ActivityObjectTypes.tsx
       title: Activity / object-type matrix
       description: How often each activity touches each object type.
       icon: Table2
-      default_w: 6
+      default_w: 3
       default_h: 6
-      min_w: 5
+      min_w: 3
       min_h: 5
       log_models: [object_centric]
+      min_px_w: 300
+      min_px_h: 220
+      help:
+        what: "Which object types each activity touches."
+        read: "An activity touching several types is a convergence point — a common source of complexity in object-centric processes."
+        computed: "Derived from event-to-object relations."
     - id: object-lifecycle
       entry: ./widgets/ObjectLifecycle.tsx
       title: Object lifecycles
       description: Per-object-type median lifecycle duration and event counts.
       icon: Timer
-      default_w: 5
+      default_w: 3
       default_h: 6
-      min_w: 5
+      min_w: 3
       min_h: 5
       log_models: [object_centric]
-
+      min_px_w: 300
+      min_px_h: 200
+      help:
+        what: "How objects of each type move through their own lifecycle."
+        read: "Compare lifecycle lengths across types to see which entity drives the overall duration."
+        computed: "Per-object event sequences from the OCEL log."
 permissions:
   - read:event_log
   - write:module_results

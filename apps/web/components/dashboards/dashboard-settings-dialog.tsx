@@ -15,25 +15,24 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { cn } from "@/lib/cn";
 import { useDashboardFilter } from "@/components/dashboards/dashboard-filter";
 import {
-  GRANULARITY,
   type CanvasSettings,
   type CardChrome,
   type FilterPreset,
-  type Granularity,
 } from "@/lib/dashboard-queries";
 
 const NONE = "__none__";
+
+/**
+ * One row of the saved-filter list. Fixed `h-10` so the "no filter" row (a bare
+ * line of text) and the preset rows (which carry a 28px delete button) keep the
+ * same rhythm instead of the list going ragged at the first preset.
+ */
+const ROW =
+  "flex h-10 cursor-pointer items-center gap-3 px-3 text-sm font-normal transition-colors hover:bg-muted/40 has-[[data-state=checked]]:bg-muted/70";
 
 function newId(): string {
   return typeof crypto !== "undefined" && crypto.randomUUID
@@ -69,6 +68,8 @@ export function DashboardSettingsDialog({
     setColumnFilters(preset ? preset.filters : []);
   };
 
+  const canSave = newName.trim().length > 0 && columnFilters.length > 0;
+
   const saveCurrentAsPreset = () => {
     const name = newName.trim();
     if (!name || columnFilters.length === 0) return;
@@ -99,7 +100,11 @@ export function DashboardSettingsDialog({
           Settings
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-md">
+      {/* `sm:max-w-md`, not `max-w-md`: DialogContent already ships
+          `sm:max-w-lg`, and a breakpoint variant outranks a bare utility above
+          `sm` – so the plain class was dead and this panel rendered 512px wide
+          around two controls. */}
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Dashboard settings</DialogTitle>
           <DialogDescription>
@@ -107,42 +112,27 @@ export function DashboardSettingsDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="divide-y divide-border">
-          {/* Grid granularity */}
-          <Section
-            title="Grid snapping"
-            description="How precisely cards snap when you move or resize them."
-          >
-            <Select
-              value={settings.granularity}
-              onValueChange={(v) => onChange({ ...settings, granularity: v as Granularity })}
-            >
-              <SelectTrigger className="h-9 w-full text-sm" aria-label="Canvas grid granularity">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {(Object.keys(GRANULARITY) as Granularity[]).map((g) => (
-                  <SelectItem key={g} value={g}>
-                    <span className="flex items-baseline gap-2">
-                      <span>{GRANULARITY[g].label}</span>
-                      <span className="text-xs text-muted-foreground">
-                        {GRANULARITY[g].description}
-                      </span>
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Section>
+        {/* The grid-snapping picker used to live here. It is gone: the board
+            is one fixed 12-column grid, because a per-board column count made
+            every widget's declared minimum size mean something different on
+            every board. */}
 
+        <div className="space-y-5">
           {/* Card appearance */}
-          <Section title="Card appearance" description="Applies to every card on this board.">
-            <ChromeToggle
-              label="Border"
-              description="Show a thin outline around each card."
-              checked={settings.chrome.border}
-              onCheckedChange={(v) => setChrome({ border: v })}
-            />
+          <Section title="Card appearance">
+            <Label className="flex cursor-pointer items-center justify-between gap-3 rounded-md border border-border bg-card px-3 py-2.5 leading-normal">
+              <span className="space-y-0.5">
+                <span className="block text-sm font-normal">Border</span>
+                <span className="block text-xs font-normal text-muted-foreground">
+                  Show a thin outline around every card on this board.
+                </span>
+              </span>
+              <Switch
+                checked={settings.chrome.border}
+                onCheckedChange={(v) => setChrome({ border: v })}
+                className="cursor-pointer"
+              />
+            </Label>
           </Section>
 
           {/* Saved filters (persisted presets) */}
@@ -150,83 +140,85 @@ export function DashboardSettingsDialog({
             title="Saved filters"
             description="Reusable filter sets. The active one loads with the board."
           >
-            <RadioGroup
-              value={settings.active_preset_id ?? NONE}
-              onValueChange={(v) => applyPreset(v === NONE ? null : v)}
-              className="gap-1"
-            >
-              <Label
-                htmlFor="seg-none"
-                className="flex items-center gap-2.5 rounded-md px-2 py-1.5 font-normal hover:bg-muted/60"
+            <div className="space-y-3">
+              <RadioGroup
+                value={settings.active_preset_id ?? NONE}
+                onValueChange={(v) => applyPreset(v === NONE ? null : v)}
+                className="gap-0 overflow-hidden rounded-md border border-border"
               >
-                <RadioGroupItem value={NONE} id="seg-none" />
-                <span className="text-sm">No filter (full log)</span>
-              </Label>
-              {settings.presets.length > 0 && (
-                <ScrollArea className="max-h-40">
-                  <div className="pr-2">
-                    {settings.presets.map((p) => (
-                      <div
-                        key={p.id}
-                        className="group flex items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-muted/60"
+                {/* One scroll box around the whole list. The previous
+                    ScrollArea wrapped the presets only – it indented them 8px
+                    past the row above it, and never actually clamped, since
+                    its viewport is `h-full` inside an auto-height root. */}
+                <div className="max-h-52 divide-y divide-border overflow-y-auto">
+                  <Label htmlFor="seg-none" className={ROW}>
+                    <RadioGroupItem value={NONE} id="seg-none" />
+                    No filter (full log)
+                  </Label>
+                  {settings.presets.map((p) => (
+                    <div key={p.id} className={cn(ROW, "group")}>
+                      <RadioGroupItem value={p.id} id={`seg-${p.id}`} />
+                      <Label
+                        htmlFor={`seg-${p.id}`}
+                        className="flex min-w-0 flex-1 cursor-pointer items-center justify-between gap-3 font-normal"
                       >
-                        <RadioGroupItem value={p.id} id={`seg-${p.id}`} />
-                        <Label htmlFor={`seg-${p.id}`} className="flex-1 truncate text-sm font-normal">
-                          {p.name}
-                        </Label>
+                        <span className="truncate">{p.name}</span>
                         <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
                           {p.filters.length} filter{p.filters.length === 1 ? "" : "s"}
                         </span>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          aria-label={`Delete ${p.name}`}
-                          className="h-7 w-7 shrink-0 text-muted-foreground opacity-0 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
-                          onClick={() => deletePreset(p.id)}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                </ScrollArea>
-              )}
-            </RadioGroup>
+                      </Label>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        aria-label={`Delete ${p.name}`}
+                        className="h-7 w-7 shrink-0 text-muted-foreground opacity-0 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+                        onClick={() => deletePreset(p.id)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </RadioGroup>
 
-            {/* Capture the live filter bar as a new named set. */}
-            <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
-              <p className="text-sm font-medium">Save current filters</p>
-              <div className="flex items-center gap-2">
-                <Input
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  placeholder="Name this filter set…"
-                  className="h-8 text-sm"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      saveCurrentAsPreset();
-                    }
-                  }}
-                />
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  disabled={!newName.trim() || columnFilters.length === 0}
-                  onClick={saveCurrentAsPreset}
-                >
-                  Save
-                </Button>
+              {/* Capture the live filter bar as a new named set. */}
+              <div className="space-y-1.5">
+                <Label htmlFor="preset-name" className="text-xs text-muted-foreground">
+                  Save current filters
+                </Label>
+                <div className="flex items-center gap-2">
+                  <Input
+                    id="preset-name"
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    placeholder="Name this filter set…"
+                    className="h-8 text-sm"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        saveCurrentAsPreset();
+                      }
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={!canSave}
+                    onClick={saveCurrentAsPreset}
+                  >
+                    Save
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {columnFilters.length === 0
+                    ? "Add filters in the bar above, then save them here."
+                    : `Captures the ${columnFilters.length} active filter${
+                        columnFilters.length === 1 ? "" : "s"
+                      } from the bar.`}
+                </p>
               </div>
-              <p className="text-xs text-muted-foreground">
-                {columnFilters.length === 0
-                  ? "Add filters in the bar above, then save them here."
-                  : `Captures the ${columnFilters.length} active filter${
-                      columnFilters.length === 1 ? "" : "s"
-                    } from the bar.`}
-              </p>
             </div>
           </Section>
         </div>
@@ -235,9 +227,9 @@ export function DashboardSettingsDialog({
   );
 }
 
-/** A titled settings group. Stacked vertically, separated by the parent's
- * `divide-y`; the title reads as a heading so sections don't blur into one
- * muted wall of text. */
+/** A titled settings group. Separated by whitespace, not rules: both groups
+ * already carry their own bordered surface, so a divider on top of that reads
+ * as a box inside a box. */
 function Section({
   title,
   description,
@@ -248,34 +240,12 @@ function Section({
   children: ReactNode;
 }) {
   return (
-    <section className="space-y-3 py-4 first:pt-0 last:pb-0">
+    <section className="space-y-2">
       <div className="space-y-0.5">
         <h3 className="text-sm font-medium leading-none">{title}</h3>
         {description && <p className="text-xs text-muted-foreground">{description}</p>}
       </div>
       {children}
     </section>
-  );
-}
-
-function ChromeToggle({
-  label,
-  description,
-  checked,
-  onCheckedChange,
-}: {
-  label: string;
-  description?: string;
-  checked: boolean;
-  onCheckedChange: (v: boolean) => void;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <div className="space-y-0.5">
-        <p className="text-sm">{label}</p>
-        {description && <p className="text-xs text-muted-foreground">{description}</p>}
-      </div>
-      <Switch checked={checked} onCheckedChange={onCheckedChange} />
-    </div>
   );
 }

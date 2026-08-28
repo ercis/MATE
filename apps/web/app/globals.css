@@ -1,6 +1,16 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/*
+ * Module panels/widgets live outside apps/web, so Tailwind's automatic source
+ * detection never sees them – a utility class used only in a module panel
+ * silently compiles to no CSS (empty legend swatches, invisible bars).
+ * Explicitly scan their sources (scoped to panel/ + widgets/ to avoid the
+ * modules' .venv / node_modules / .dist trees).
+ */
+@source "../../../modules/*/panel";
+@source "../../../modules/*/widgets";
+
 @custom-variant dark (&:is(.dark *));
 
 /*
@@ -53,6 +63,53 @@
   --chart-4: oklch(0.828 0.189 84.429);
   --chart-5: oklch(0.769 0.188 70.08);
 
+  /* Categorical series palette — light mode.
+   *
+   * Eight slots, ASSIGNED IN FIXED ORDER and never cycled: a 9th series folds
+   * into "Other", facets into small multiples, or uses hue x shape. The order
+   * itself is the colourblind-safety mechanism, not a cosmetic choice, so do
+   * not reorder or add steps without re-running the validator.
+   *
+   * Validated (OKLab dE x100, surface #fcfcfb): worst adjacent CVD 9.1
+   * (target >=8), worst adjacent normal-vision 19.6 (floor >=15).
+   *
+   * CAVEAT, light mode only: aqua (3), yellow (4) and magenta (5) fall below
+   * 3:1 against the surface. That is not dismissable — a chart using them must
+   * carry visible direct labels or a table view, never colour alone. See
+   * `seriesColor` in components/dashboards/kit/palette.ts. */
+  --ff-series-1: #2a78d6; /* blue */
+  --ff-series-2: #eb6834; /* orange */
+  --ff-series-3: #1baf7a; /* aqua */
+  --ff-series-4: #eda100; /* yellow */
+  --ff-series-5: #e87ba4; /* magenta */
+  --ff-series-6: #008300; /* green */
+  --ff-series-7: #4a3aa7; /* violet */
+  --ff-series-8: #e34948; /* red */
+
+  /* Sequential (magnitude): one hue, light -> dark. Never a rainbow. */
+  --ff-seq-100: #cde2fb;
+  --ff-seq-250: #86b6ef;
+  --ff-seq-400: #3987e5;
+  --ff-seq-550: #1c5cab;
+  --ff-seq-700: #0d366b;
+
+  /* Diverging (polarity): warm/cool poles + a NEUTRAL midpoint. The midpoint
+   * must read as "nothing", so it is grey, never a third hue. */
+  --ff-div-low: #2a78d6;
+  --ff-div-mid: #f0efec;
+  --ff-div-high: #e34948;
+
+  /* Status — reserved. Never reuse these for "series 4", and never let one
+   * carry meaning alone: they always ship with an icon + label. */
+  --ff-status-good: #0ca30c;
+  --ff-status-warning: #fab219;
+  --ff-status-serious: #ec835a;
+  --ff-status-critical: #d03b3b;
+
+  /* Chart chrome — recessive by design. */
+  --ff-grid-line: #e1e0d9;
+  --ff-axis-line: #c3c2b7;
+
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: oklch(0.205 0 0);
@@ -61,6 +118,82 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+
+  /* ── GlinUI Liquid Glass tokens (additive; ride the .dark flip) ── */
+  --glass-blur-sm: 8px;
+  --glass-blur-md: 16px;
+  --glass-blur-lg: 24px;
+  --glass-blur-xl: 40px;
+
+  --glass-adapt-surface-multiplier: 1.4;
+  --glass-adapt-border-multiplier: 1;
+  --glass-adapt-refraction-multiplier: 1;
+  --glass-adapt-saturate-multiplier: 1;
+
+  --glass-base-rgb: 255 255 255;
+  --glass-saturate-base: 180%;
+  --glass-saturate-subtle-base: 130%;
+  --glass-saturate: calc(var(--glass-saturate-base) * var(--glass-adapt-saturate-multiplier));
+  --glass-saturate-subtle: calc(var(--glass-saturate-subtle-base) * var(--glass-adapt-saturate-multiplier));
+
+  --glass-border-alpha: 0.2;
+  --glass-border-strong-alpha: 0.35;
+  --glass-refraction-top-alpha: 0.4;
+  --glass-surface: rgb(var(--glass-base-rgb) / calc(0.18 * var(--glass-adapt-surface-multiplier)));
+  --glass-border: rgb(255 255 255 / calc(var(--glass-border-alpha) * var(--glass-adapt-border-multiplier)));
+  --glass-border-strong: rgb(255 255 255 / calc(var(--glass-border-strong-alpha) * var(--glass-adapt-border-multiplier)));
+  --glass-refraction-top: rgb(255 255 255 / calc(var(--glass-refraction-top-alpha) * var(--glass-adapt-refraction-multiplier)));
+
+  --glass-opacity-1: 0.06;
+  --glass-opacity-2: 0.08;
+  --glass-opacity-3: 0.1;
+  --glass-opacity-4: 0.12;
+  --glass-opacity-5: 0.16;
+  --glass-opacity-6: 0.18;
+  --glass-opacity-7: 0.22;
+  --glass-opacity-8: 0.25;
+  --glass-opacity-9: 0.3;
+  --glass-opacity-10: 0.35;
+
+  --glass-gpu-transform: translateZ(0);
+  --glass-gpu-backface-visibility: hidden;
+  --glass-gpu-will-change: transform, opacity;
+  --glass-heavy-will-change: backdrop-filter, transform, opacity;
+  --glass-heavy-contain: paint;
+
+  --shadow-glass-sm: 0 2px 8px rgba(0, 0, 0, 0.08);
+  --shadow-glass-md: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 4px rgba(0, 0, 0, 0.08);
+  --shadow-glass-lg: 0 16px 48px rgba(0, 0, 0, 0.16), 0 4px 8px rgba(0, 0, 0, 0.08);
+  --shadow-glass-inset: inset 0 1px 0 rgba(255, 255, 255, 0.12), inset 0 -1px 0 rgba(0, 0, 0, 0.05);
+
+  --glass-1-blur: 8px;
+  --glass-1-opacity: var(--glass-opacity-2);
+  --glass-1-surface: rgb(var(--glass-base-rgb) / calc(var(--glass-1-opacity) * var(--glass-adapt-surface-multiplier)));
+  --glass-1-shadow: var(--shadow-glass-sm);
+  --glass-2-blur: 12px;
+  --glass-2-opacity: var(--glass-opacity-4);
+  --glass-2-surface: rgb(var(--glass-base-rgb) / calc(var(--glass-2-opacity) * var(--glass-adapt-surface-multiplier)));
+  --glass-2-shadow: var(--shadow-glass-sm);
+  --glass-3-blur: 16px;
+  --glass-3-opacity: var(--glass-opacity-6);
+  --glass-3-surface: rgb(var(--glass-base-rgb) / calc(var(--glass-3-opacity) * var(--glass-adapt-surface-multiplier)));
+  --glass-3-shadow: var(--shadow-glass-md);
+  --glass-4-blur: 24px;
+  --glass-4-opacity: var(--glass-opacity-8);
+  --glass-4-surface: rgb(var(--glass-base-rgb) / calc(var(--glass-4-opacity) * var(--glass-adapt-surface-multiplier)));
+  --glass-4-shadow: var(--shadow-glass-lg);
+  --glass-5-blur: 40px;
+  --glass-5-opacity: var(--glass-opacity-10);
+  --glass-5-surface: rgb(var(--glass-base-rgb) / calc(var(--glass-5-opacity) * var(--glass-adapt-surface-multiplier)));
+  --glass-5-shadow: var(--shadow-glass-lg);
+
+  --motion-fast: 150ms;
+  --motion-normal: 250ms;
+  --motion-slow: 400ms;
+  --motion-spring: 500ms;
+  --easing-standard: cubic-bezier(0.2, 0, 0, 1);
+  --easing-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --easing-glass: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .dark {
@@ -101,6 +234,40 @@
   --chart-4: oklch(0.627 0.265 303.9);
   --chart-5: oklch(0.645 0.246 16.439);
 
+  /* Categorical series palette — dark mode. The SAME eight hues re-stepped for
+   * a dark surface, not a different palette: slot N is the same series in both
+   * modes, so a chart doesn't change identity when the theme flips. Validated
+   * independently against the dark surface (worst adjacent CVD dE 8.4,
+   * normal-vision 19.3, and unlike light mode all eight clear 3:1). */
+  --ff-series-1: #3987e5;
+  --ff-series-2: #d95926;
+  --ff-series-3: #199e70;
+  --ff-series-4: #c98500;
+  --ff-series-5: #d55181;
+  --ff-series-6: #008300;
+  --ff-series-7: #9085e9;
+  --ff-series-8: #e66767;
+
+  --ff-seq-100: #0d366b;
+  --ff-seq-250: #1c5cab;
+  --ff-seq-400: #3987e5;
+  --ff-seq-550: #86b6ef;
+  --ff-seq-700: #cde2fb;
+
+  --ff-div-low: #3987e5;
+  --ff-div-mid: #383835;
+  --ff-div-high: #e66767;
+
+  /* Status steps are mode-invariant by design — a status colour means the same
+   * thing in both themes. All four clear 3:1 on the dark surface. */
+  --ff-status-good: #0ca30c;
+  --ff-status-warning: #fab219;
+  --ff-status-serious: #ec835a;
+  --ff-status-critical: #d03b3b;
+
+  --ff-grid-line: #2c2c2a;
+  --ff-axis-line: #383835;
+
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.488 0.243 264.376);
@@ -109,6 +276,23 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+
+  /* ── GlinUI Liquid Glass — dark overrides (base flips 255→0) ── */
+  --glass-base-rgb: 0 0 0;
+  --glass-border-alpha: 0.1;
+  --glass-border-strong-alpha: 0.18;
+  --glass-refraction-top-alpha: 0.15;
+  --glass-surface: rgb(var(--glass-base-rgb) / calc(0.4 * var(--glass-adapt-surface-multiplier)));
+  --glass-opacity-1: 0.16;
+  --glass-opacity-2: 0.2;
+  --glass-opacity-3: 0.25;
+  --glass-opacity-4: 0.3;
+  --glass-opacity-5: 0.35;
+  --glass-opacity-6: 0.4;
+  --glass-opacity-7: 0.48;
+  --glass-opacity-8: 0.55;
+  --glass-opacity-9: 0.62;
+  --glass-opacity-10: 0.7;
 }
 
 @theme inline {
@@ -152,6 +336,253 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+
+  /* GlinUI motion → exposes ease-standard/ease-glass/ease-spring +
+     duration-fast/normal/slow/spring Tailwind utilities. */
+  --ease-standard: var(--easing-standard);
+  --ease-spring: var(--easing-spring);
+  --ease-glass: var(--easing-glass);
+  --transition-duration-fast: var(--motion-fast);
+  --transition-duration-normal: var(--motion-normal);
+  --transition-duration-slow: var(--motion-slow);
+  --transition-duration-spring: var(--motion-spring);
+
+  /* GlinUI effect animations → `animate-<name>` utilities. Each reads the
+     per-instance duration CSS var the component sets (with a fallback). */
+  --animate-aurora-shift: aurora-shift var(--aurora-duration, 8s) ease-in-out infinite;
+  --animate-mesh-shift: mesh-shift var(--mesh-duration, 10s) ease-in-out infinite;
+  --animate-particle-float: particle-float var(--particle-duration, 5s) ease-in-out infinite;
+  --animate-spotlight-pulse: spotlight-pulse var(--spotlight-pulse-duration, 3s) ease-out infinite;
+  --animate-chromatic-shift: chromatic-shift var(--chromatic-duration, 3s) ease-in-out infinite;
+  --animate-glow-rotate: glow-rotate var(--glow-duration, 4s) linear infinite;
+  --animate-word-rotate-in: word-rotate-in 0.3s var(--easing-glass) both;
+  --animate-word-rotate-out: word-rotate-out 0.3s var(--easing-glass) both;
+  --animate-blink: blink 1s step-end infinite;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   GlinUI Liquid Glass — backdrop, surface utilities, a11y fallbacks.
+   Utilities live in @layer components so real Tailwind utilities
+   (bg-*, backdrop-blur-*) still override them when layered on top.
+   ══════════════════════════════════════════════════════════════════════ */
+
+@layer base {
+  /* Immersive stage: a subtle, static, fixed color wash behind the whole
+     app so translucent glass surfaces have something to refract. Painted as
+     background-image over the opaque `bg-background` color (not a per-frame
+     effect), and hidden behind the opaque `--surface-elevated` used by dense
+     data views, so tables/canvases stay clean. */
+  body {
+    background-image:
+      radial-gradient(
+        60rem 42rem at 8% -10%,
+        color-mix(in oklab, var(--primary) 7%, transparent),
+        transparent 60%
+      ),
+      radial-gradient(
+        52rem 40rem at 112% 4%,
+        color-mix(in oklab, var(--chart-1) 7%, transparent),
+        transparent 55%
+      ),
+      radial-gradient(
+        72rem 60rem at 50% 118%,
+        color-mix(in oklab, var(--chart-3) 6%, transparent),
+        transparent 60%
+      );
+    background-attachment: fixed;
+    background-repeat: no-repeat;
+  }
+}
+
+@layer components {
+  .glass-surface,
+  .glass-1,
+  .glass-2,
+  .glass-3,
+  .glass-4,
+  .glass-5 {
+    border: 1px solid var(--glass-border);
+    border-top-color: var(--glass-refraction-top);
+    background-clip: padding-box;
+  }
+
+  .glass-surface,
+  .glass-3 {
+    background: var(--glass-3-surface);
+    backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-3-blur));
+    -webkit-backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-3-blur));
+    box-shadow: var(--glass-3-shadow);
+  }
+  .glass-1 {
+    background: var(--glass-1-surface);
+    backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-1-blur));
+    -webkit-backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-1-blur));
+    box-shadow: var(--glass-1-shadow);
+  }
+  .glass-2 {
+    background: var(--glass-2-surface);
+    backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-2-blur));
+    -webkit-backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-2-blur));
+    box-shadow: var(--glass-2-shadow);
+  }
+  .glass-4 {
+    background: var(--glass-4-surface);
+    backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-4-blur));
+    -webkit-backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-4-blur));
+    box-shadow: var(--glass-4-shadow);
+  }
+  .glass-5 {
+    background: var(--glass-5-surface);
+    backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-5-blur));
+    -webkit-backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-5-blur));
+    box-shadow: var(--glass-5-shadow);
+  }
+
+  /* GPU hints — attach to a glass element that moves/animates. */
+  .glass-gpu-hint {
+    transform: var(--glass-gpu-transform);
+    backface-visibility: var(--glass-gpu-backface-visibility);
+    will-change: var(--glass-gpu-will-change);
+  }
+  .glass-heavy {
+    transform: var(--glass-gpu-transform);
+    backface-visibility: var(--glass-gpu-backface-visibility);
+    will-change: var(--glass-heavy-will-change);
+    contain: var(--glass-heavy-contain);
+  }
+
+  /* Background-luminance adaptation: set data-glass-luminance on a container
+     to retune every glass child for the wallpaper behind it. */
+  .glass-adapt-neutral,
+  [data-glass-luminance="neutral"] {
+    --glass-adapt-surface-multiplier: 1;
+    --glass-adapt-border-multiplier: 1;
+    --glass-adapt-refraction-multiplier: 1;
+    --glass-adapt-saturate-multiplier: 1;
+  }
+  .glass-adapt-bright,
+  [data-glass-luminance="bright"] {
+    --glass-adapt-surface-multiplier: 1.16;
+    --glass-adapt-border-multiplier: 1.08;
+    --glass-adapt-refraction-multiplier: 1.14;
+    --glass-adapt-saturate-multiplier: 1.04;
+  }
+  .glass-adapt-dim,
+  [data-glass-luminance="dim"] {
+    --glass-adapt-surface-multiplier: 0.9;
+    --glass-adapt-border-multiplier: 1.15;
+    --glass-adapt-refraction-multiplier: 1.22;
+    --glass-adapt-saturate-multiplier: 0.96;
+  }
+}
+
+/* Reduced transparency → drop the blur, fall back to near-opaque surfaces. */
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --glass-1-surface: rgba(255, 255, 255, 0.92);
+    --glass-2-surface: rgba(255, 255, 255, 0.94);
+    --glass-3-surface: rgba(255, 255, 255, 0.95);
+    --glass-4-surface: rgba(255, 255, 255, 0.96);
+    --glass-5-surface: rgba(255, 255, 255, 0.98);
+  }
+  .dark {
+    --glass-1-surface: rgba(0, 0, 0, 0.88);
+    --glass-2-surface: rgba(0, 0, 0, 0.9);
+    --glass-3-surface: rgba(0, 0, 0, 0.92);
+    --glass-4-surface: rgba(0, 0, 0, 0.94);
+    --glass-5-surface: rgba(0, 0, 0, 0.96);
+  }
+  .glass-surface,
+  .glass-1,
+  .glass-2,
+  .glass-3,
+  .glass-4,
+  .glass-5 {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+/* Reduced motion → collapse the named motion durations too (the existing
+   @layer base rule already zeroes animation/transition durations). */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 1ms;
+    --motion-normal: 1ms;
+    --motion-slow: 1ms;
+    --motion-spring: 1ms;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   GlinUI effect keyframes — referenced by components/glass/*. Each effect
+   component self-disables under reduced motion via `motion-reduce:[animation:none]`.
+   Keyframes that move a centered element preserve its inline translate(-50%,-50%).
+   ══════════════════════════════════════════════════════════════════════ */
+@keyframes aurora-shift {
+  0%, 100% { transform: translate(-50%, -50%) scale(1); }
+  33% { transform: translate(-38%, -62%) scale(1.18); }
+  66% { transform: translate(-62%, -44%) scale(0.9); }
+}
+@keyframes mesh-shift {
+  0%, 100% { transform: translate(-50%, -50%) scale(1); background-position: 0% 50%; }
+  50% { transform: translate(-44%, -56%) scale(1.12); background-position: 100% 50%; }
+}
+@keyframes particle-float {
+  0% { transform: translate(0, 0); opacity: 0; }
+  12% { opacity: 1; }
+  88% { opacity: 1; }
+  100% {
+    transform: translate(var(--particle-drift, 0px), var(--particle-distance, -200px));
+    opacity: 0;
+  }
+}
+@keyframes spotlight-pulse {
+  0% { transform: translate(-50%, -50%) scale(0.75); opacity: 0.85; }
+  100% { transform: translate(-50%, -50%) scale(1.6); opacity: 0; }
+}
+@keyframes chromatic-shift {
+  0%, 100% {
+    transform: translate(var(--chromatic-offset, 2px), calc(var(--chromatic-offset, 2px) * -1));
+  }
+  50% {
+    transform: translate(calc(var(--chromatic-offset, 2px) * -1), var(--chromatic-offset, 2px));
+  }
+}
+@keyframes glow-rotate {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+/* Registered so the angle interpolates smoothly (a plain custom prop would jump
+   at 100%). Drives the conic-gradient sweep in `components/glass/border-beam`. */
+@property --border-beam-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+@keyframes border-beam {
+  to { --border-beam-angle: 360deg; }
+}
+@keyframes meteor-fall {
+  0% { transform: rotate(var(--meteor-angle, 215deg)) translateX(0); opacity: 1; }
+  70% { opacity: 1; }
+  100% { transform: rotate(var(--meteor-angle, 215deg)) translateX(600px); opacity: 0; }
+}
+@keyframes ripple-expand {
+  0% { transform: scale(0.8); opacity: 1; }
+  100% { transform: scale(1); opacity: 0; }
+}
+@keyframes word-rotate-in {
+  0% { transform: translateY(100%); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+@keyframes word-rotate-out {
+  0% { transform: translateY(0); opacity: 1; }
+  100% { transform: translateY(-100%); opacity: 0; }
+}
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
 }
 
 @layer base {
@@ -197,6 +628,32 @@
   }
   .animate-heartbeat {
     animation: heartbeat 1.2s ease-in-out infinite;
+  }
+  /* Skeleton shimmer sweep – layered over the pulsing bg in
+     components/ui/skeleton.tsx. Transform-only (GPU-friendly); the sweep
+     tint derives from --foreground so it adapts to dark mode, and the
+     reduced-motion rule below freezes it like every other animation. */
+  @keyframes skeleton-shimmer {
+    100% {
+      transform: translateX(100%);
+    }
+  }
+  .skeleton-shimmer {
+    position: relative;
+    overflow: hidden;
+  }
+  .skeleton-shimmer::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background-image: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in oklab, var(--foreground) 6%, transparent),
+      transparent
+    );
+    animation: skeleton-shimmer 1.8s ease-in-out infinite;
   }
   /* prefers-reduced-motion: framer-motion checks this via the matchMedia API,
      but stripping CSS animations is the belt-and-braces. */
@@ -255,26 +712,54 @@
   cursor: pointer;
 }
 
-/* react-grid-layout: theme the default (red) drop placeholder. */
+/* react-grid-layout: theme the default (red) drop placeholder to match the
+   palette-add ghost (both preview the same commit). */
 .react-grid-item.react-grid-placeholder {
-  background: var(--primary) !important;
-  border-radius: 0.5rem;
-  opacity: 0.15 !important;
+  background: color-mix(in oklab, var(--primary) 8%, transparent) !important;
+  border: 1.5px dashed color-mix(in oklab, var(--primary) 45%, transparent);
+  border-radius: var(--radius-md);
+  opacity: 1 !important;
+  transition-duration: 100ms;
+}
+
+/* The palette→canvas add ghost (dashboard-canvas.tsx) shares that language. */
+.dashboard-add-ghost {
+  background: color-mix(in oklab, var(--primary) 8%, transparent);
+  border: 1.5px dashed color-mix(in oklab, var(--primary) 45%, transparent);
+}
+
+/* Selected cards. The ring sits on the grid item (not the card) so it tracks
+   the item's transform during a drag, and reads clearly against both the
+   edit-mode resting ring and the hover state on `.dashboard-card-root`. */
+.react-grid-item[data-selected] > * > .dashboard-card-root {
+  outline: 2px solid var(--primary);
+  outline-offset: -1px;
 }
 
 /* Reflow easing: the cards that spring aside when another is dragged, resized,
    or removed ease in snappily. Lower specificity than the `none` rules below
-   (the active card + mount slide), so those still win for the active item. */
+   (the active card + mount slide), so those still win for the active item.
+
+   `transform` ONLY — deliberately not width/height. Reflow never resizes a
+   card (cards that yield move down, they don't shrink), so easing those two
+   bought nothing and cost twice: animating box dimensions forces layout on
+   every frame for every card, and during a resize gesture it made the card
+   lag the grip, since the layout updates per pointer move but the box eased
+   150ms behind it. Size changes now land immediately; position still eases. */
 .react-grid-item {
-  transition-property: transform, width, height;
-  transition-duration: 180ms;
+  transition-property: transform;
+  transition-duration: 150ms;
   transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
 }
 
 /* Kill the one-time mount slide (WidthProvider reflows from its 1280px default
    to the measured width). The canvas drops `.rgl-mounting` after the first two
-   frames, restoring transitions for drag/resize. */
-.rgl-mounting .react-grid-item {
+   frames, restoring transitions for drag/resize. `.rgl-zooming` is the same
+   suppression while the canvas zoom is changing: the scale change re-derives
+   every card's layout position, and easing those against an instant scale
+   change shears. */
+.rgl-mounting .react-grid-item,
+.rgl-zooming .react-grid-item {
   transition: none !important;
 }
 
@@ -295,44 +780,55 @@
   cursor: se-resize;
 }
 
-/* Tactile lift on the active card. Applied to the *inner* card root (not the
-   grid-item, whose `transform` RGL owns) so it composes with RGL's translate.
-   `.dashboard-card-root` carries its own transition so this eases in/out. */
+/* Tactile lift on the active card (n8n-style: picked up, slightly scaled, a
+   soft deep shadow + the accent ring marking it as the live object). Applied
+   to the *inner* card root (not the grid-item, whose `transform` RGL owns) so
+   it composes with RGL's translate. `.dashboard-card-root` carries its own
+   transition so this eases in/out. */
 .react-grid-item.rgl-free-dragging .dashboard-card-root {
   box-shadow:
-    0 10px 24px -10px rgb(0 0 0 / 0.35),
-    0 4px 10px -6px rgb(0 0 0 / 0.25);
-  transform: translateY(-2px);
+    0 24px 48px -12px rgb(0 0 0 / 0.28),
+    0 8px 16px -8px rgb(0 0 0 / 0.2);
+  transform: translateY(-3px) scale(1.02);
+  outline: 2px solid color-mix(in oklab, var(--primary) 50%, transparent);
+  outline-offset: -1px;
 }
 .react-grid-item.rgl-free-resizing .dashboard-card-root {
   box-shadow:
-    0 10px 24px -10px rgb(0 0 0 / 0.35),
-    0 4px 10px -6px rgb(0 0 0 / 0.25);
-  outline: 1px solid color-mix(in srgb, var(--primary) 40%, transparent);
+    0 16px 32px -12px rgb(0 0 0 / 0.24),
+    0 6px 12px -6px rgb(0 0 0 / 0.18);
+  outline: 2px solid color-mix(in oklab, var(--primary) 50%, transparent);
   outline-offset: -1px;
 }
 
 /* The header doubles as the drag handle; stop touch scrolling from hijacking a
-   drag gesture on it. */
+   drag gesture on it. Grab cursors say "pick me up" (n8n/Figma vocabulary). */
 .dashboard-drag-handle {
   touch-action: none;
+  cursor: grab;
+}
+.rgl-free-dragging .dashboard-drag-handle {
+  cursor: grabbing;
 }
 
-/* Dashboard canvas: subtle dotted grid so the board area reads as a workspace
-   and card placement is easier to eyeball. Themed via --border so it adapts to
-   light/dark. `isolation` contains the dotted ::before (z-index -1) so it paints
-   below the cards. */
+/* Dashboard canvas frame: just the backdrop colour. The dotted texture lives on
+   the zoom layer below so it scales and scrolls with the board. */
 .dashboard-canvas-bg {
-  position: relative;
-  isolation: isolate;
   background-color: var(--background);
 }
 
-/* The dots live on a ::before overlay (not the element background) so their
-   opacity can transition: the texture is quiet at rest and "wakes up" to full
-   when the board enters edit mode (`data-editing`). A fixed, neutral backdrop —
-   not a snap guide; the real snap grid is the board's granularity. */
-.dashboard-canvas-bg::before {
+/* The zoom layer (dashboard-canvas.tsx) is the surface that gets CSS-scaled.
+   It carries the dotted workspace grid on a ::before so (a) the dots zoom and
+   pan with the cards exactly like an n8n canvas, (b) they cover the full board
+   height (the layer grows with content – an overlay on the scroll container
+   would stop at the first viewport), and (c) their opacity can transition:
+   quiet at rest, full when the board enters edit mode (`data-editing`). */
+.dashboard-zoom-layer {
+  position: relative;
+  isolation: isolate;
+  transform-origin: 0 0;
+}
+.dashboard-zoom-layer::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -344,6 +840,47 @@
   opacity: 0.55;
   transition: opacity 200ms ease;
 }
-.dashboard-canvas-bg[data-editing="true"]::before {
+.dashboard-zoom-layer[data-editing]::before {
   opacity: 1;
+}
+
+/* diagram-js makes the canvas SVG keyboard-focusable; on interact (enter/move
+   an element) the UA focus ring drew a blue border hugging the whole canvas
+   (`.djs-container svg:focus { outline-offset: -1px }` from diagram-js.css).
+   Suppress it — panning/zooming is pointer-driven and needs no focus ring. */
+.djs-container svg:focus,
+.djs-container svg:focus-visible {
+  outline: none;
+}
+
+/* First-load splash. `#ff-splash-boot` is the server-rendered pre-hydration
+   cover in (platform)/layout.tsx: it is part of the initial HTML so the very
+   first paint of a new browser session shows the splash, never a flash of the
+   page behind it. An inline script ahead of it stamps `data-ff-splash-done` on
+   <html> when the splash already ran this session (sessionStorage flag), hiding
+   the cover before it can paint; components/app-splash.tsx stamps the same
+   attribute once its hydrated overlay has committed, taking over seamlessly.
+   The glow keyframes live here (not in a component <style>) so both the boot
+   cover and the hydrated overlay share them. */
+html[data-ff-splash-done] #ff-splash-boot {
+  display: none;
+}
+@keyframes ff-splash-glow {
+  0%,
+  100% {
+    opacity: 0.28;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(1.12);
+  }
+}
+.ff-splash-glow-anim {
+  animation: ff-splash-glow 1.8s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ff-splash-glow-anim {
+    animation: none;
+  }
 }

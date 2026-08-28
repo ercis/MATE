@@ -43,7 +43,14 @@ export function FormatBadge({
   return (
     <Badge
       variant="outline"
-      className={cn("px-1.5 py-0 text-[10px] font-semibold tracking-wide", style.className, className)}
+      className={cn(
+        "px-1.5 py-0 text-[10px] font-semibold tracking-wide",
+        // Liquid-glass frost over the per-format hue: a bright refracted top
+        // edge + subtle blur/saturation, keeping each format's colour identity.
+        "[border-top-color:var(--glass-refraction-top)] backdrop-blur-md backdrop-saturate-150 shadow-[0_1px_0_rgb(255_255_255_/_0.25)_inset]",
+        style.className,
+        className,
+      )}
     >
       {style.label}
     </Badge>

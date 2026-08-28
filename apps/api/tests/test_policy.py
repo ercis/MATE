@@ -409,41 +409,201 @@ async def test_admin_controls_catalog(admin_client: AsyncClient) -> None:
 
 
 # --------------------------------------------------------------------------
-# Module config: admin-controlled + 403
+# Per-card module control (mate.api.modules.cards)
 # --------------------------------------------------------------------------
+
+_MID = "sample_cards"
+
+
+async def _lock_card(client: AsyncClient, card_id: str, value: object) -> None:
+    resp = await client.put(
+        f"/api/v1/admin/controls/items/card/{_MID}:{card_id}",
+        json={"control_mode": "admin", "admin_value": value},
+    )
+    assert resp.status_code == 200, resp.text
+
+
+async def _unlock_card(client: AsyncClient, card_id: str) -> None:
+    resp = await client.put(
+        f"/api/v1/admin/controls/items/card/{_MID}:{card_id}",
+        json={"control_mode": "user"},
+    )
+    assert resp.status_code == 200, resp.text
 
 
 @pytest.mark.asyncio
-async def test_module_config_403_when_controlled(client_with_sample_mod: AsyncClient) -> None:
-    from mate.api.db.engine import get_sessionmaker
-    from mate.api.policy import SCOPE_MODULE, set_policy
+async def test_card_lock_overlays_only_its_slice(
+    admin_client_with_sample_cards: AsyncClient,
+) -> None:
+    """Locking the config card overlays only the config slice - the user's AI
+    and model selections survive (the whole-module-lock regression)."""
+    c = admin_client_with_sample_cards
+    user_cfg = {
+        "threshold": 0.5,
+        "mode": "fast",
+        "ai": {"llm": {"model": "user-llm"}},
+        "model": "user-model",
+    }
+    put = await c.put(f"/api/v1/modules/{_MID}/config", json={"config": user_cfg, "enabled": True})
+    assert put.status_code == 200
 
-    module_id = "sample_mod"
-    sm = get_sessionmaker()
-    try:
-        async with sm() as session:
-            await set_policy(
-                session,
-                SCOPE_MODULE,
-                module_id,
-                control_mode="admin",
-                admin_value={"threshold": 0.9},
-                updated_by=TEST_USER_ID,
-            )
-            await session.commit()
+    await _lock_card(c, "config", {"threshold": 0.9, "mode": "slow"})
 
-        # GET returns the shared config flagged read-only.
-        got = await client_with_sample_mod.get(f"/api/v1/modules/{module_id}/config")
-        assert got.status_code == 200
-        gj = got.json()
-        assert gj["controlled_by_admin"] is True
-        assert gj["config"] == {"threshold": 0.9}
+    body = (await c.get(f"/api/v1/modules/{_MID}/config")).json()
+    assert body["controlled_cards"] == {"config": True, "ai": False, "model": False}
+    assert body["controlled_by_admin"] is False  # not every card is locked
+    # config props come from the admin; ai + model stay the user's.
+    assert body["config"]["threshold"] == 0.9
+    assert body["config"]["mode"] == "slow"
+    assert body["config"]["ai"] == {"llm": {"model": "user-llm"}}
+    assert body["config"]["model"] == "user-model"
+    # The read-only sentinel is a runtime-only marker, never in the /config body.
+    assert "__model_admin_locked__" not in body["config"]
 
-        # PUT is forbidden while controlled.
-        put = await client_with_sample_mod.put(
-            f"/api/v1/modules/{module_id}/config",
-            json={"config": {"threshold": 0.1}, "enabled": True},
-        )
-        assert put.status_code == 403
-    finally:
-        await _clear_policy(SCOPE_MODULE, module_id)
+    # The effective config the module actually receives matches.
+    echo = (await c.get(f"/api/v1/modules/{_MID}/echo-config")).json()
+    assert echo["config"]["threshold"] == 0.9
+    assert echo["config"]["ai"] == {"llm": {"model": "user-llm"}}
+
+
+@pytest.mark.asyncio
+async def test_model_card_lock_sets_sentinel(
+    admin_client_with_sample_cards: AsyncClient,
+) -> None:
+    c = admin_client_with_sample_cards
+    await c.put(
+        f"/api/v1/modules/{_MID}/config",
+        json={"config": {"threshold": 0.5, "model": "user-model"}, "enabled": True},
+    )
+    await _lock_card(c, "model", {"model": "pinned"})
+
+    body = (await c.get(f"/api/v1/modules/{_MID}/config")).json()
+    assert body["controlled_cards"]["model"] is True
+    assert body["config"]["model"] == "pinned"
+    assert "__model_admin_locked__" not in body["config"]
+
+    # The module context gets the sentinel + pin; its /models route reads it.
+    echo = (await c.get(f"/api/v1/modules/{_MID}/echo-config")).json()
+    assert echo["config"]["__model_admin_locked__"] is True
+    assert echo["config"]["model"] == "pinned"
+    models = (await c.get(f"/api/v1/modules/{_MID}/models")).json()
+    assert models == {"locked": True, "selected": "pinned"}
+
+
+@pytest.mark.asyncio
+async def test_ai_card_lock_sets_sentinel(
+    admin_client_with_sample_cards: AsyncClient,
+) -> None:
+    """Locking the ai card injects __ai_admin_locked__ into the module's runtime
+    config (never into /config) so action routes gated on it - e.g. CDE's
+    Pinecone rebuild - can refuse."""
+    c = admin_client_with_sample_cards
+    await c.put(
+        f"/api/v1/modules/{_MID}/config",
+        json={"config": {"threshold": 0.5, "ai": {"llm": {"model": "user-llm"}}}, "enabled": True},
+    )
+    await _lock_card(c, "ai", {"ai": {"llm": {"model": "pinned-llm"}}})
+
+    body = (await c.get(f"/api/v1/modules/{_MID}/config")).json()
+    assert body["controlled_cards"]["ai"] is True
+    assert body["config"]["ai"] == {"llm": {"model": "pinned-llm"}}
+    # Runtime-only marker, never leaked to the settings body.
+    assert "__ai_admin_locked__" not in body["config"]
+
+    # The module context receives the sentinel + the pinned ai slice.
+    echo = (await c.get(f"/api/v1/modules/{_MID}/echo-config")).json()
+    assert echo["config"]["__ai_admin_locked__"] is True
+    assert echo["config"]["ai"] == {"llm": {"model": "pinned-llm"}}
+
+    # Locks persist in the shared fixture DB; unlock so later tests see the ai
+    # card unlocked again (mirrors the config-card tests' cleanup).
+    await _unlock_card(c, "ai")
+
+
+@pytest.mark.asyncio
+async def test_put_ignores_locked_card_keeps_user_slice(
+    admin_client_with_sample_cards: AsyncClient,
+) -> None:
+    """A PUT no longer 403s while a card is locked; the locked card's slice is
+    kept from the user's stored value, other cards persist."""
+    c = admin_client_with_sample_cards
+    await c.put(
+        f"/api/v1/modules/{_MID}/config",
+        json={
+            "config": {"threshold": 0.5, "mode": "fast", "ai": {"llm": {"model": "user-llm"}}},
+            "enabled": True,
+        },
+    )
+    await _lock_card(c, "config", {"threshold": 0.9, "mode": "slow"})
+
+    # User tries to change the locked config props AND the unlocked ai card.
+    put = await c.put(
+        f"/api/v1/modules/{_MID}/config",
+        json={
+            "config": {"threshold": 0.1, "mode": "hacked", "ai": {"llm": {"model": "new-llm"}}},
+            "enabled": True,
+        },
+    )
+    assert put.status_code == 200  # no 403
+
+    # Unlock and confirm the stored user slice for config was preserved (0.5),
+    # not the attempted 0.1, while the ai change persisted.
+    await _unlock_card(c, "config")
+    stored = (await c.get(f"/api/v1/modules/{_MID}/config")).json()["config"]
+    assert stored["threshold"] == 0.5
+    assert stored["mode"] == "fast"
+    assert stored["ai"] == {"llm": {"model": "new-llm"}}
+
+
+@pytest.mark.asyncio
+async def test_enabled_stays_user_controlled_under_lock(
+    admin_client_with_sample_cards: AsyncClient,
+) -> None:
+    c = admin_client_with_sample_cards
+    await _lock_card(c, "config", {"threshold": 0.9})
+    await _lock_card(c, "ai", {"ai": {"llm": {"model": "admin-llm"}}})
+    await _lock_card(c, "model", {"model": "pinned"})
+
+    body = (await c.get(f"/api/v1/modules/{_MID}/config")).json()
+    assert body["controlled_by_admin"] is True  # every card locked
+
+    # The user can still disable the module even with every card locked.
+    put = await c.put(f"/api/v1/modules/{_MID}/config", json={"config": {}, "enabled": False})
+    assert put.status_code == 200
+    assert put.json()["enabled"] is False
+    assert (await c.get(f"/api/v1/modules/{_MID}/config")).json()["enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_card_catalog_and_setting_drops_cv4cdd_model(
+    admin_client_with_sample_cards: AsyncClient,
+) -> None:
+    c = admin_client_with_sample_cards
+    # cv4cdd.model is gone from the server-settings catalog.
+    settings = (await c.get("/api/v1/admin/controls/items?scope=setting")).json()["items"]
+    skeys = {it["key"] for it in settings}
+    assert "cv4cdd.model" not in skeys
+    assert "ai.config" in skeys
+
+    # The card catalog lists one item per card the loaded module exposes.
+    cards = (await c.get("/api/v1/admin/controls/items?scope=card")).json()["items"]
+    by_key = {it["key"]: it for it in cards}
+    assert {"sample_cards:config", "sample_cards:ai", "sample_cards:model"} <= set(by_key)
+    cfg_item = by_key["sample_cards:config"]
+    assert cfg_item["module_id"] == "sample_cards" and cfg_item["card_id"] == "config"
+    assert cfg_item["config_schema"] is not None
+    assert by_key["sample_cards:model"]["model_store"] is not None
+    assert by_key["sample_cards:ai"]["ai_models"] is not None
+
+
+@pytest.mark.asyncio
+async def test_model_card_lock_requires_model_name(
+    admin_client_with_sample_cards: AsyncClient,
+) -> None:
+    """An empty model-card pin is rejected (would break autodetect for all)."""
+    c = admin_client_with_sample_cards
+    resp = await c.put(
+        "/api/v1/admin/controls/items/card/sample_cards:model",
+        json={"control_mode": "admin", "admin_value": {"model": ""}},
+    )
+    assert resp.status_code == 422

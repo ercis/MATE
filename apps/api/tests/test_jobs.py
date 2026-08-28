@@ -188,16 +188,30 @@ async def test_reaper_sigkills_offloaded_process() -> None:
             type_="test.offload_hang", user_id=TEST_USER_ID, title="offload", payload={}
         )
 
-        # Grab the child the runtime registered for this job, while it's running.
-        proc = None
+        import os
+
+        from mate.api.jobs.supervisor import get_child_supervisor
+
+        def _pid_alive(pid: int) -> bool:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return False
+            return True
+
+        # Grab the offload child's pid the supervisor registered for this job,
+        # while it's running.
+        pid: int | None = None
         for _ in range(100):  # ≤5s (covers spawn/forkserver child startup)
-            procs = rt._offload_procs.get(job_id)
-            if procs:
-                proc = next(iter(procs))
+            for h in get_child_supervisor().snapshot():
+                if h.job_id == job_id and h.kind == "offload":
+                    pid = h.pid
+                    break
+            if pid is not None:
                 break
             await asyncio.sleep(0.05)
-        assert proc is not None, "offload child was never registered"
-        assert proc.is_alive()
+        assert pid is not None, "offload child was never registered with the supervisor"
+        assert _pid_alive(pid)
 
         # Reaper fires at ~1s → job recorded as a failed-timeout (not a user cancel).
         status, err = "running", None
@@ -209,14 +223,14 @@ async def test_reaper_sigkills_offloaded_process() -> None:
         assert status == "failed"
         assert err is not None and "timeout" in err.lower()
 
-        # The fix: the offloaded OS process is actually dead - terminated by signal
-        # (negative exitcode == -SIGKILL), not left burning a core to completion.
+        # The fix: the offloaded OS process is actually dead - SIGKILLed by the
+        # reaper through the supervisor and reaped, not left burning a core to
+        # completion (it was a 300s sleep; it cannot have finished in this window).
         for _ in range(40):  # ≤2s for the host-side join/reap to settle
-            if not proc.is_alive():
+            if not _pid_alive(pid):
                 break
             await asyncio.sleep(0.05)
-        assert not proc.is_alive()
-        assert proc.exitcode is not None and proc.exitcode < 0
+        assert not _pid_alive(pid)
         assert rt.live_stats()["running"] == 0
     finally:
         await rt.stop()
@@ -410,3 +424,102 @@ async def test_sse_events_receives_job_lifecycle(client: AsyncClient) -> None:
     assert "job.queued" in topics
     assert "job.started" in topics
     assert "job.completed" in topics
+
+
+@pytest.mark.asyncio
+async def test_interrupted_precompute_resumes_on_restart() -> None:
+    """A precompute job killed mid-run (or left queued) by a restart must re-run
+    on the next boot, not strand with an empty result cache.
+
+    Regression: importing a log locally with `make dev` (`uvicorn --reload`), the
+    *slow* modules (cv4cdd ~70s, complexity-over-time) were still running when a
+    reload restarted the API. The boot reconcile marked them `failed` and stranded
+    the queued ones, so nothing ever wrote their output - the dock showed the jobs
+    but their panels were empty, i.e. they "did nothing". Precompute jobs are
+    idempotent and re-runnable from their persisted row, so an interrupted one is
+    reset to `queued` and re-enqueued instead.
+    """
+    from mate.api.config import get_settings
+    from mate.api.db.engine import get_sessionmaker
+    from mate.api.db.models import Job
+    from mate.api.events.bus import EventBus
+    from mate.api.jobs.runtime import JobRuntime
+
+    from .conftest import TEST_USER_ID
+
+    rt = JobRuntime(settings=get_settings(), bus=EventBus())
+    ran: list[str] = []
+
+    async def precompute(handle: object) -> None:
+        ran.append(handle.id)  # type: ignore[attr-defined]
+
+    # Precompute handlers are registered under exactly this type shape by the
+    # module loader (`module.<id>.event.<topic>`).
+    rt.register("module.demo.event.log_imported", precompute)
+    sm = get_sessionmaker()
+
+    async def _status(job_id: str) -> str:
+        async with sm() as session:
+            job = await session.get(Job, job_id)
+            assert job is not None
+            return job.status
+
+    def _child(jid: str, status: str, *, parent: str | None) -> Job:
+        return Job(
+            id=jid,
+            user_id=TEST_USER_ID,
+            type="module.demo.event.log_imported",
+            title="demo precompute",
+            module_id="demo",
+            parent_job_id=parent,
+            payload_json={"log_id": "log-1", "_event_payload": {}},
+            status=status,
+        )
+
+    # The state a crash-mid-import leaves behind: a completed import job with one
+    # child left `running` (slow module killed mid-run) and one still `queued`
+    # (never got a worker), plus an unrelated `running` job with no import parent
+    # (must fail as before, not resume).
+    seeded = ["imp-1", "pc-running", "pc-queued", "other-running"]
+    async with sm() as session:
+        session.add(
+            Job(
+                id="imp-1",
+                user_id=TEST_USER_ID,
+                type="event_log.import",
+                title="import",
+                payload_json={"log_id": "log-1"},
+                status="completed",
+            )
+        )
+        session.add(_child("pc-running", "running", parent="imp-1"))
+        session.add(_child("pc-queued", "queued", parent="imp-1"))
+        session.add(_child("other-running", "running", parent=None))
+        await session.commit()
+
+    try:
+        await rt.start()  # runs _reconcile_orphan_running
+
+        # Killed precompute child → reset to `queued` (resumable), not failed.
+        assert await _status("pc-running") == "queued"
+        # Unrelated running job (no import parent) → failed as before.
+        assert await _status("other-running") == "failed"
+
+        await rt.resume_interrupted_precompute()
+
+        for jid in ("pc-running", "pc-queued"):
+            for _ in range(60):  # ≤3s
+                if await _status(jid) == "completed":
+                    break
+                await asyncio.sleep(0.05)
+            assert await _status(jid) == "completed", jid
+        assert set(ran) == {"pc-running", "pc-queued"}  # both actually re-ran
+        assert await _status("other-running") == "failed"  # never resumed
+    finally:
+        await rt.stop()
+        async with sm() as session:
+            for jid in seeded:
+                row = await session.get(Job, jid)
+                if row is not None:
+                    await session.delete(row)
+            await session.commit()

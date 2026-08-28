@@ -8,6 +8,13 @@ import { PageContainer } from "@/components/page";
 // page chrome immediately on navigation/fetch so the user gets an instant,
 // pulsing preview of where the data will land instead of a blank screen.
 // Used by route-level loading.tsx files and in-page <Suspense>/isLoading paths.
+//
+// A skeleton only earns its keep if it reserves the space the real page will
+// occupy — a placeholder for chrome the page never renders is worse than no
+// placeholder at all, because the content visibly jumps when it resolves. The
+// topbar owns the title, description and breadcrumb for every route now
+// (lib/page-meta.ts), so nothing here draws them; a page header is only its
+// action row.
 
 /** A bordered card-table shell – mirrors the rounded-xl tables across the app. */
 export function TableSkeleton({
@@ -20,7 +27,7 @@ export function TableSkeleton({
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-xl border border-border bg-card",
+        "overflow-hidden rounded-xl border border-white/10 bg-card/60 backdrop-blur-sm",
         className,
       )}
     >
@@ -64,7 +71,7 @@ export function CardGridSkeleton({
       {Array.from({ length: count }).map((_, i) => (
         <div
           key={i}
-          className="space-y-3 rounded-xl border border-border bg-card p-5"
+          className="space-y-3 rounded-xl border border-white/10 bg-card/60 backdrop-blur-sm p-5"
         >
           <div className="flex items-center gap-3">
             <Skeleton className="h-9 w-9 rounded-lg" />
@@ -97,7 +104,7 @@ export function StatCardsSkeleton({
       {Array.from({ length: count }).map((_, i) => (
         <div
           key={i}
-          className="space-y-3 rounded-xl border border-border bg-card p-5"
+          className="space-y-3 rounded-xl border border-white/10 bg-card/60 backdrop-blur-sm p-5"
         >
           <Skeleton className="h-3 w-24" />
           <Skeleton className="h-7 w-20" />
@@ -112,7 +119,7 @@ export function ChartCardSkeleton({ className }: { className?: string }) {
   return (
     <div
       className={cn(
-        "space-y-4 rounded-xl border border-border bg-card p-5",
+        "space-y-4 rounded-xl border border-white/10 bg-card/60 backdrop-blur-sm p-5",
         className,
       )}
     >
@@ -125,59 +132,86 @@ export function ChartCardSkeleton({ className }: { className?: string }) {
   );
 }
 
-/** Page header placeholder (title + description + optional actions). */
-export function PageHeaderSkeleton({ withActions = true }: { withActions?: boolean }) {
+/**
+ * Page header placeholder — the action row, and on the pages that have one a
+ * left-aligned filter strip. Mirrors `<PageHeader>`, which is actions-only
+ * across the app (`justify-end`, or `items-center` alongside filters).
+ */
+export function PageHeaderSkeleton({
+  actions = 2,
+  withFilters = false,
+}: {
+  /** Number of action buttons to reserve space for. */
+  actions?: number;
+  withFilters?: boolean;
+}) {
   return (
-    <div className="flex flex-wrap items-start justify-between gap-4 pb-6">
-      <div className="space-y-2">
-        <Skeleton className="h-7 w-48" />
-        <Skeleton className="h-4 w-72" />
+    <div className="flex flex-wrap items-center justify-between gap-4 pb-6">
+      {withFilters && <Skeleton className="h-9 w-60 rounded-md" />}
+      <div className="ml-auto flex items-center gap-2">
+        {Array.from({ length: actions }).map((_, i) => (
+          <Skeleton key={i} className="h-9 w-32 rounded-md" />
+        ))}
       </div>
-      {withActions && (
-        <div className="flex items-center gap-2">
-          <Skeleton className="h-9 w-28 rounded-md" />
-          <Skeleton className="h-9 w-32 rounded-md" />
-        </div>
-      )}
     </div>
   );
 }
 
-/** Full page shell: header + content (defaults to a table). */
+/** Full page shell: action header + content (defaults to a table). */
 export function PageSkeleton({
   children,
-  withActions = true,
+  actions,
+  withFilters,
 }: {
   children?: React.ReactNode;
-  withActions?: boolean;
+  actions?: number;
+  withFilters?: boolean;
 }) {
   return (
     <PageContainer>
-      <PageHeaderSkeleton withActions={withActions} />
+      <PageHeaderSkeleton actions={actions} withFilters={withFilters} />
       {children ?? <TableSkeleton />}
     </PageContainer>
   );
 }
 
-/** Detail shell: breadcrumb + title + tab strip + KPI cards + canvas. */
+/**
+ * Process detail shell — mirrors process-detail-client.tsx: a full-bleed tab
+ * bar reading as an extension of the topbar, then the module card grid.
+ *
+ * Deliberately NOT wrapped in a single PageContainer: the bar spans the full
+ * viewport and re-applies the container's cap + padding on an inner div, so the
+ * triggers line up with the capped content below. Matching that here is what
+ * keeps the tab row from shifting sideways when the real page takes over.
+ */
 export function DetailSkeleton() {
   return (
+    <>
+      <div className="border-b border-border">
+        <div className="mx-auto flex w-full max-w-[1760px] items-center gap-3 px-4 sm:px-6 lg:px-8">
+          {Array.from({ length: 5 }).map((_, i) => (
+            // px-3 py-3 matches ProcessTabs' triggers, so the bar is the same
+            // height before and after hydration.
+            <div key={i} className="px-3 py-3">
+              <Skeleton className="h-5 w-20" />
+            </div>
+          ))}
+          <Skeleton className="ml-auto h-8 w-56 shrink-0 rounded-md" />
+        </div>
+      </div>
+      <PageContainer>
+        <CardGridSkeleton />
+      </PageContainer>
+    </>
+  );
+}
+
+/** A module panel shell: the panel owns its own chrome, so just reserve the
+ *  canvas the route will fill. */
+export function PanelSkeleton() {
+  return (
     <PageContainer>
-      <div className="space-y-2 pb-6">
-        <Skeleton className="h-3.5 w-40" />
-        <Skeleton className="h-7 w-64" />
-      </div>
-      <div className="flex flex-wrap gap-2 border-b border-border pb-2">
-        {Array.from({ length: 5 }).map((_, i) => (
-          <Skeleton key={i} className="h-8 w-24 rounded-md" />
-        ))}
-      </div>
-      <div className="grid gap-4 pt-6 sm:grid-cols-2 lg:grid-cols-4">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <Skeleton key={i} className="h-24 w-full rounded-xl" />
-        ))}
-      </div>
-      <Skeleton className="mt-6 h-80 w-full rounded-xl" />
+      <Skeleton className="h-[70vh] w-full rounded-xl" />
     </PageContainer>
   );
 }

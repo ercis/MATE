@@ -31,6 +31,9 @@ dependencies = [
     "boto3>=1.34",
     "packaging>=24.0",
     "psutil>=6.0",
+    # <2: the 2.0 SDK renamed mcp.server.fastmcp -> mcp.server.mcpserver.
+    "mcp>=1.2,<2",
+    "prometheus-client>=0.20",
     "mate-sdk",
 ]
 

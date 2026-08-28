@@ -1,6 +1,6 @@
 "use client";
 
-import { Handle, type Node, type NodeProps } from "@xyflow/react";
+import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import { Play, Square } from "lucide-react";
 
 import { cn } from "@/lib/cn";
@@ -11,16 +11,55 @@ export interface TerminalNodeData extends Record<string, unknown> {
   kind: "start" | "end";
   /** Total number of cases that start (or end) at the connected real activities. */
   caseCount?: number;
+  /** "vertical" pins handles to Top/Bottom regardless of the general layout
+   *  direction — the Process-flow layout is vertical-only. */
+  orientation?: "vertical";
+  /** "celonis" renders the compact Celonis Start/End pill (dot + label + count). */
+  variant?: "celonis";
 }
 
 export type TerminalNode = Node<TerminalNodeData, "terminal">;
 
 export function TerminalNode({ data }: NodeProps<TerminalNode>) {
   const { layoutDirection } = useGeneralSettings();
-  const { source, target } = handlePositions(layoutDirection);
+  const { source, target } =
+    data.orientation === "vertical"
+      ? { source: Position.Bottom, target: Position.Top }
+      : handlePositions(layoutDirection);
   const isStart = data.kind === "start";
   const Icon = isStart ? Play : Square;
-  const label = isStart ? "Start" : "End";
+  const label = isStart ? "Process start" : "Process end";
+
+  if (data.variant === "celonis") {
+    // Celonis-style terminal: compact pill, teal dot, short label, count.
+    return (
+      <div className="relative h-full w-full">
+        {!isStart && (
+          <Handle type="target" position={target} className="!h-1.5 !w-1.5 !border-0 !bg-transparent" />
+        )}
+        <div
+          className="flex h-full w-full items-center justify-center gap-1.5 rounded-full border bg-card shadow-sm"
+          title={isStart ? "Cases start here" : "Cases end here"}
+        >
+          <span
+            className="shrink-0 rounded-full"
+            style={{ width: 10, height: 10, background: "var(--dfg-edge, rgb(36, 148, 153))" }}
+          />
+          <span className="text-[13px] text-foreground">{isStart ? "Start" : "End"}</span>
+          {typeof data.caseCount === "number" && data.caseCount > 0 && (
+            <span className="text-[11px] font-medium text-muted-foreground">
+              {data.caseCount >= 1000
+                ? `${(data.caseCount / 1000).toFixed(data.caseCount % 1000 === 0 ? 0 : 1)}K`
+                : data.caseCount}
+            </span>
+          )}
+        </div>
+        {isStart && (
+          <Handle type="source" position={source} className="!h-1.5 !w-1.5 !border-0 !bg-transparent" />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="relative">
@@ -33,7 +72,7 @@ export function TerminalNode({ data }: NodeProps<TerminalNode>) {
       )}
       <div
         className={cn(
-          "flex h-9 items-center gap-2 rounded-full border px-4 shadow-sm transition-colors",
+          "flex h-9 items-center justify-center gap-2 rounded-full border px-4 shadow-sm transition-colors",
           isStart
             ? "border-chart-2/50 bg-chart-2/15 text-foreground"
             : "border-chart-1/50 bg-chart-1/15 text-foreground",
@@ -46,7 +85,9 @@ export function TerminalNode({ data }: NodeProps<TerminalNode>) {
             isStart ? "fill-chart-2 text-chart-2" : "fill-chart-1 text-chart-1",
           )}
         />
-        <span className="text-[11px] font-semibold uppercase tracking-wider">{label}</span>
+        <span className="whitespace-nowrap text-[11px] font-semibold uppercase tracking-wider">
+          {label}
+        </span>
         {typeof data.caseCount === "number" && data.caseCount > 0 && (
           <span className="text-[10px] tabular-nums text-muted-foreground">
             {data.caseCount}

@@ -10,6 +10,11 @@ from __future__ import annotations
 
 import pytest
 
+# The imports below reach into the module's own venv deps (pinecone et al.), which
+# the platform venv does not carry. Skip instead of failing collection so
+# `uv run pytest modules/concept_drift_explainer/tests` stays runnable from the
+# repo's toolchain; the full suite runs on the module venv.
+pytest.importorskip("pinecone")
 from modules.concept_drift_explainer.utils.pinecone_client import (
     DEFAULT_DIMENSION,
     _configured_dimension,

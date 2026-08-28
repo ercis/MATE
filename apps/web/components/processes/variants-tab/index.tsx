@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Search } from "lucide-react";
 
 import {
@@ -19,9 +20,14 @@ import { useVariants, type VariantsListParams } from "@/lib/queries";
 import type { EventLogDetail } from "@/lib/api-types";
 import { formatDuration, formatNumber, formatRelative } from "@/lib/format";
 import { displayActivities, getActivityRenameMap } from "@/lib/activity-rename";
+import { variantHref } from "@/lib/dashboards/drill";
 import { cn } from "@/lib/cn";
+import { DEFAULT_VARIANTS_SORT, PROCESS_PAGE_SIZE } from "@/lib/query-keys";
+import { useDebouncedValue } from "@/lib/use-debounced-value";
 
-const PAGE_SIZE = 50;
+// Shared with prefetchProcessTabs (client-prefetch.ts): the prefetched first
+// page must hash to the same query key this tab reads on first render.
+const PAGE_SIZE = PROCESS_PAGE_SIZE;
 
 type SortField = "case_count" | "avg_duration_seconds" | "last_seen";
 
@@ -29,6 +35,13 @@ interface SortState {
   field: SortField;
   dir: "asc" | "desc";
 }
+
+// Initial sort derives from the shared constant so it can't drift from the
+// prefetch (`"case_count:desc"` ⇄ `{field, dir}`).
+const [INITIAL_SORT_FIELD, INITIAL_SORT_DIR] = DEFAULT_VARIANTS_SORT.split(":") as [
+  SortField,
+  "asc" | "desc",
+];
 
 const SORT_LABEL: Record<SortField, string> = {
   case_count: "Cases",
@@ -38,20 +51,28 @@ const SORT_LABEL: Record<SortField, string> = {
 
 export function VariantsTab({ logId, log }: { logId: string; log: EventLogDetail }) {
   const renameMap = useMemo(() => getActivityRenameMap(log), [log]);
+  const searchParams = useSearchParams();
   const [page, setPage] = useState(0);
-  const [sort, setSort] = useState<SortState>({ field: "case_count", dir: "desc" });
-  const [activityQuery, setActivityQuery] = useState("");
+  const [sort, setSort] = useState<SortState>({ field: INITIAL_SORT_FIELD, dir: INITIAL_SORT_DIR });
+  // Deep-linkable activity filter: e.g. the discovery DFG's "show variants
+  // with this activity" jump lands here with `?tab=variants&activity=…`.
+  const [activityQuery, setActivityQuery] = useState(() => searchParams.get("activity") ?? "");
   const [minCases, setMinCases] = useState("");
+
+  // Debounced: each param change re-runs the variants aggregation on the API,
+  // so free-text/number keystrokes must not fire per-key requests.
+  const debouncedActivityQuery = useDebouncedValue(activityQuery, 300);
+  const debouncedMinCases = useDebouncedValue(minCases, 300);
 
   const params = useMemo<VariantsListParams>(
     () => ({
       offset: page * PAGE_SIZE,
       limit: PAGE_SIZE,
       sort: `${sort.field}:${sort.dir}`,
-      activity_contains: activityQuery.trim() || undefined,
-      min_case_count: minCases ? Number(minCases) : undefined,
+      activity_contains: debouncedActivityQuery.trim() || undefined,
+      min_case_count: debouncedMinCases ? Number(debouncedMinCases) : undefined,
     }),
-    [page, sort, activityQuery, minCases],
+    [page, sort, debouncedActivityQuery, debouncedMinCases],
   );
 
   const { data, isLoading, isError, error } = useVariants(logId, params);
@@ -157,16 +178,13 @@ export function VariantsTab({ logId, log }: { logId: string; log: EventLogDetail
                     className="h-12 cursor-pointer hover:bg-muted/40"
                   >
                     <TableCell className="text-right tabular-nums text-xs text-muted-foreground">
-                      <Link
-                        href={`/processes/${logId}/variants/${v.variant_id}`}
-                        className="block"
-                      >
+                      <Link href={variantHref(logId, v.variant_id)} className="block">
                         {v.rank}
                       </Link>
                     </TableCell>
                     <TableCell>
                       <Link
-                        href={`/processes/${logId}/variants/${v.variant_id}`}
+                        href={variantHref(logId, v.variant_id)}
                         className="block truncate hover:underline underline-offset-2"
                         title={display.join(" → ")}
                       >

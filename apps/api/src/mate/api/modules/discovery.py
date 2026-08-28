@@ -7,9 +7,9 @@ Two sources, both pointing at a folder with a `manifest.yaml`:
 2. **Python entry points.** Any installed Python package may declare an
    entry point under the `mate.modules` group whose value is the
    importable package name. The folder containing that package's
-   `__init__.py` is treated as the module folder. This is how
-   `pip install ff-mod-<x>` (and the `POST /api/v1/modules/install/registry`
-   path in `install_jobs.py`) get picked up without copying files.
+   `__init__.py` is treated as the module folder. This is how a
+   `pip install`-ed package that declares the entry point gets picked up
+   without copying files.
 
 Two manifests declaring the same id is a hard error regardless of source.
 """
@@ -55,6 +55,9 @@ def discover(*roots: Path) -> list[DiscoveredModule]:
     colliding with a bundled default) is skipped with a warning rather than
     aborting the whole load - one stray module must fail itself, not brick
     every module at boot. Rejecting an id collision is the upload path's job.
+
+    Same policy for a folder whose ``manifest.yaml`` no longer validates: log
+    and skip. Discovery never raises on one bad folder.
     """
 
     discovered: list[DiscoveredModule] = []
@@ -75,8 +78,14 @@ def discover(*roots: Path) -> list[DiscoveredModule]:
             try:
                 manifest = Manifest.load_yaml(manifest_path)
             except ModuleManifestError as exc:
+                # Skip, don't raise. A manifest that stopped validating (an
+                # upload predating a schema change, a hand-edited folder) is one
+                # module's problem; re-raising aborted the whole discovery pass
+                # and booted the platform with *zero* modules. Loud error log,
+                # everything else still loads. The upload path validates before
+                # writing, so this only catches folders already on disk.
                 log.error("modules.discovery.manifest_invalid", folder=str(entry), error=str(exc))
-                raise
+                continue
             if manifest.id in seen_ids:
                 # Roots are scanned defaults-first, so the first-seen copy wins
                 # and a later duplicate (almost always a leftover upload sitting
@@ -181,30 +190,53 @@ def discover_entry_points() -> list[DiscoveredModule]:
 
 
 def topo_sort(discovered: Iterable[DiscoveredModule]) -> list[DiscoveredModule]:
-    """Topological sort by hard `requirements.modules`. Cycles raise."""
+    """Topological sort by hard `requirements.modules`.
+
+    Unloadable nodes are **dropped, not raised** - same policy as an invalid
+    manifest in `discover()`: one broken module fails itself, it does not brick
+    the boot. Dropped in two passes:
+
+    1. A module requiring an id that isn't present (never installed, or skipped
+       upstream because its manifest no longer validates) - and, at fixpoint,
+       everything that in turn required *it*.
+    2. Cycle members: whatever Kahn can't emit is in or behind a cycle.
+
+    Ties inside a layer resolve alphabetically, so the order is byte-identical
+    across boots.
+    """
+
     by_id: dict[str, DiscoveredModule] = {d.id: d for d in discovered}
-    visited: dict[str, str] = {}  # id -> "temp" | "perm"
+
+    # Pass 1 - fixpoint prune of unsatisfiable hard requirements.
+    while True:
+        unsatisfiable = {
+            mid: dep
+            for mid, d in by_id.items()
+            for dep in d.manifest.requirements.modules
+            if dep not in by_id
+        }
+        if not unsatisfiable:
+            break
+        for mid, dep in unsatisfiable.items():
+            log.error("modules.discovery.requirement_missing", module_id=mid, requires=dep)
+            del by_id[mid]
+
+    # Pass 2 - Kahn over the pruned graph.
+    deps: dict[str, set[str]] = {
+        mid: set(d.manifest.requirements.modules) for mid, d in by_id.items()
+    }
     out: list[DiscoveredModule] = []
+    emitted: set[str] = set()
+    while True:
+        ready = sorted(mid for mid, need in deps.items() if not (need - emitted))
+        if not ready:
+            break
+        for mid in ready:
+            out.append(by_id[mid])
+            emitted.add(mid)
+            del deps[mid]
 
-    def visit(node_id: str, stack: list[str]) -> None:
-        if visited.get(node_id) == "perm":
-            return
-        if visited.get(node_id) == "temp":
-            cycle = " → ".join([*stack, node_id])
-            raise ModuleManifestError(f"Module dependency cycle: {cycle}")
-        node = by_id.get(node_id)
-        if node is None:
-            raise ModuleManifestError(
-                f"Module {stack[-1] if stack else '?'} requires {node_id!r}, which is not loaded."
-            )
-        visited[node_id] = "temp"
-        for dep in node.manifest.requirements.modules:
-            visit(dep, [*stack, node_id])
-        visited[node_id] = "perm"
-        out.append(node)
-
-    for d in by_id.values():
-        if d.id not in visited:
-            visit(d.id, [])
+    for mid in sorted(deps):
+        log.error("modules.discovery.dependency_cycle", module_id=mid, requires=sorted(deps[mid]))
 
     return out

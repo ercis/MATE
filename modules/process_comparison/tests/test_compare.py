@@ -10,8 +10,11 @@ from __future__ import annotations
 import pandas as pd
 from modules.process_comparison import compute as comp
 from modules.process_comparison.serializers import (
+    build_activity_diff,
     serialize_activity_deltas,
+    serialize_bpmn,
     serialize_dfg_diff,
+    serialize_summary_delta,
     serialize_variant_diff,
 )
 
@@ -118,3 +121,57 @@ def test_activity_deltas_share_and_sojourn() -> None:
     assert d_row["freq_share_delta_vs_baseline"][1] > 0.0
     # Every activity carries a sojourn entry per log (0.0 when absent).
     assert len(d_row["avg_sojourn_s"]) == 2
+
+
+def test_summary_kpis_exact() -> None:
+    # LOG_A: 4 cases, 12 events, activities {a,b,c}, variants {abc, acb}; every
+    # case spans exactly 2h (events step 1h apart) → mean throughput 7200s.
+    k = comp.summary_kpis(LOG_A)
+    assert k["cases"] == 4
+    assert k["events"] == 12
+    assert k["activities"] == 3
+    assert k["variants"] == 2
+    assert k["throughput_s"] == 7200.0
+
+
+def test_summary_delta_sign_and_pct() -> None:
+    out = serialize_summary_delta(comp.summary_kpis(LOG_A), comp.summary_kpis(LOG_B))
+    by_key = {k["key"]: k for k in out["kpis"]}
+    # B adds activity d → distinct activities 3 → 4.
+    acts = by_key["activities"]
+    assert acts["value_a"] == 3
+    assert acts["value_b"] == 4
+    assert acts["delta"] == 1
+    assert acts["pct_delta"] == 1 / 3
+    # Throughput is flagged "lower is better" so the panel can colour it.
+    thr = by_key["throughput_s"]
+    assert thr["unit"] == "seconds"
+    assert thr["lower_is_better"] is True
+
+
+def test_summary_delta_pct_guards_zero_baseline() -> None:
+    a = {"cases": 0, "events": 0, "activities": 0, "variants": 0, "throughput_s": 0.0}
+    b = {"cases": 5, "events": 9, "activities": 3, "variants": 2, "throughput_s": 60.0}
+    by_key = {k["key"]: k for k in serialize_summary_delta(a, b)["kpis"]}
+    assert by_key["cases"]["delta"] == 5
+    assert by_key["cases"]["pct_delta"] is None  # baseline 0 → no percentage
+    assert by_key["throughput_s"]["delta"] == 60.0
+
+
+def test_build_activity_diff_statuses() -> None:
+    dfg_a, sa, ea = comp.discover_dfg(LOG_A)
+    dfg_b, sb, eb = comp.discover_dfg(LOG_B)
+    rows = {r["id"]: r for r in build_activity_diff(dfg_a, sa, ea, dfg_b, sb, eb)}
+    assert rows["d"]["status"] == "only_b"  # new in B
+    assert rows["a"]["status"] == "shared"
+    assert rows["a"]["is_start"] is True  # every trace starts with a
+
+
+def test_serialize_bpmn_emits_xml_with_activities() -> None:
+    payload = serialize_bpmn(comp.discover_bpmn(LOG_A))
+    assert payload["kind"] == "bpmn"
+    xml = payload["xml"]
+    assert "definitions" in xml.lower()
+    # Activities surface as task names in the BPMN export.
+    for act in ("a", "b", "c"):
+        assert f'name="{act}"' in xml

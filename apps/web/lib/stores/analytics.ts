@@ -11,6 +11,10 @@ interface AnalyticsState {
   captureClicks: boolean;
   capturePerf: boolean;
   captureErrors: boolean;
+  // UI-log capture kinds (input values, keyboard combos, pointer traces).
+  captureInputs: boolean;
+  captureKeyboard: boolean;
+  capturePointer: boolean;
   // True once the onboarding privacy step has been answered (either way).
   promptResolved: boolean;
   // Stable anonymous id; matches `analytics.config.anon_user_id_seed` on
@@ -22,7 +26,17 @@ interface AnalyticsState {
   lastActivityAt: number | null;
   setEnabled: (v: boolean) => void;
   setCaptureFlags: (
-    flags: Partial<Pick<AnalyticsState, "captureClicks" | "capturePerf" | "captureErrors">>,
+    flags: Partial<
+      Pick<
+        AnalyticsState,
+        | "captureClicks"
+        | "capturePerf"
+        | "captureErrors"
+        | "captureInputs"
+        | "captureKeyboard"
+        | "capturePointer"
+      >
+    >,
   ) => void;
   resolvePrompt: (optIn: boolean) => void;
   setAnonUserId: (id: string) => void;
@@ -38,6 +52,9 @@ export const useAnalytics = create<AnalyticsState>()(
       captureClicks: true,
       capturePerf: true,
       captureErrors: true,
+      captureInputs: true,
+      captureKeyboard: true,
+      capturePointer: true,
       promptResolved: false,
       anonUserId: null,
       sessionId: null,

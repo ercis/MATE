@@ -42,6 +42,18 @@ export async function putSession(sid: string, token: JWT, ttlSeconds: number): P
   await fs.rename(tmp, target); // atomic within the same filesystem
 }
 
+/** Remove a session entry (server-side logout). Unknown/invalid sids are a
+ * no-op – the route calling this treats the cookie value as untrusted input. */
+export async function deleteSession(sid: string): Promise<void> {
+  let target: string;
+  try {
+    target = fileFor(sid);
+  } catch {
+    return;
+  }
+  await fs.unlink(target).catch(() => {});
+}
+
 export async function readSession(sid: string): Promise<JWT | null> {
   let target: string;
   try {

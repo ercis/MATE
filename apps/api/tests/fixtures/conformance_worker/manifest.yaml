@@ -1,0 +1,15 @@
+# Test fixture: the Python conformance worker (see module.py). Mirrors the JVM
+# conformance fixture (packages/module-sdk-jvm/conformance-fixture) handler for
+# handler so test_worker_conformance.py runs the same matrix on both runtimes.
+id: conformance_worker
+name: Conformance Worker
+version: 0.1.0
+category: other
+description: Protocol conformance fixture - exercises every ctx.* surface.
+dependencies:
+  python:
+    isolation: subprocess
+provides:
+  - conformance.pinged
+consumes:
+  - log.imported

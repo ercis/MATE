@@ -2,7 +2,7 @@
 
 import { useActivityObjectTypes } from "../panel/queries";
 import { MatrixHeatmap } from "../panel/MatrixHeatmap";
-import { CardShell } from "./_kit";
+import {CardShell} from "@/components/dashboards/kit";
 
 /** Compact activity / object-type heatmap card: how many events of each
  *  activity touch each object type. */

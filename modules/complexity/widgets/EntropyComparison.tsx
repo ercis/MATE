@@ -11,7 +11,7 @@ import {
 } from "recharts";
 
 import { useComplexityMetrics } from "../panel/queries";
-import { CardShell } from "./_kit";
+import {CardShell} from "@/components/dashboards/kit";
 
 /** Side-by-side of the normalized entropy variants (0..1). */
 export default function EntropyComparison({ logId }: { logId: string }) {

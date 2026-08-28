@@ -27,6 +27,7 @@ user's are filtered out - that's how per-user isolation is enforced.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from collections.abc import AsyncIterator
 from datetime import datetime
@@ -37,6 +38,8 @@ from fastapi.responses import StreamingResponse
 
 from mate.api.auth import CurrentUserDep
 from mate.api.events import get_event_bus
+from mate.api.schemas.common import utc_isoformat
+from mate.api.shutdown import is_shutting_down
 
 router = APIRouter(tags=["events"])
 
@@ -45,13 +48,18 @@ router = APIRouter(tags=["events"])
 # far more frequent, but the stream can sit silent for minutes between jobs.
 _HEARTBEAT_S = 15.0
 
+# Re-check the shutdown flag this often so a `while True` stream self-closes
+# within ~one interval of SIGTERM, ahead of uvicorn's graceful-shutdown timeout.
+_SHUTDOWN_POLL_S = 2.0
+
 # Headers that keep proxies from buffering the stream (mirrors the AI route).
 _SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 
 
 def _json_default(value: Any) -> Any:
     if isinstance(value, datetime):
-        return value.isoformat()
+        # Naive datetimes are UTC platform-wide; serialize with the offset.
+        return utc_isoformat(value)
     return str(value)
 
 
@@ -71,20 +79,47 @@ async def stream_events(
         # `async with` lives inside the generator so the bus subscription is torn
         # down the moment the client disconnects (the generator is closed).
         async with bus.subscribe(topics) as stream:
-            while True:
-                try:
-                    env = await asyncio.wait_for(anext(stream), _HEARTBEAT_S)
-                except TimeoutError:
-                    yield ": ping\n\n"
-                    continue
-                except StopAsyncIteration:
-                    return
-                # Filter cross-user events. System-emitted envelopes (no
-                # `user_id` in payload) are always forwarded - they're
-                # operator-level, never user data.
-                env_user = env.payload.get("user_id")
-                if env_user is not None and env_user != user.id:
-                    continue
-                yield _sse(env.to_json())
+            # Keep ONE pending pull alive across idle ticks. `asyncio.wait` with a
+            # timeout does NOT cancel the task when it fires (unlike `wait_for`), so
+            # a quiet interval no longer throws CancelledError into the bus
+            # generator's `queue.get()` - which would close the generator and end
+            # the stream ~2 s after every connect, forcing a client reconnect and
+            # dropping any event published in the gap.
+            nxt = asyncio.ensure_future(anext(stream))
+            idle = 0.0
+            try:
+                while True:
+                    # Poll the shutdown flag so the stream exits during uvicorn's
+                    # connection drain instead of being force-cancelled at the
+                    # grace deadline (which prints a CancelledError ASGI traceback).
+                    if is_shutting_down():
+                        return
+                    done, _ = await asyncio.wait({nxt}, timeout=_SHUTDOWN_POLL_S)
+                    if not done:
+                        idle += _SHUTDOWN_POLL_S
+                        if idle >= _HEARTBEAT_S:
+                            idle = 0.0
+                            yield ": ping\n\n"
+                        continue
+                    try:
+                        env = nxt.result()
+                    except StopAsyncIteration:
+                        return
+                    # Re-arm the pull before yielding so no event is missed.
+                    nxt = asyncio.ensure_future(anext(stream))
+                    idle = 0.0
+                    # Filter cross-user events. System-emitted envelopes (no
+                    # `user_id` in payload) are always forwarded - they're
+                    # operator-level, never user data.
+                    env_user = env.payload.get("user_id")
+                    if env_user is not None and env_user != user.id:
+                        continue
+                    yield _sse(env.to_json())
+            finally:
+                # Cancel the orphaned pull on client disconnect / shutdown so the
+                # bus subscription's queue isn't left with a dangling reader.
+                nxt.cancel()
+                with contextlib.suppress(BaseException):
+                    await nxt
 
     return StreamingResponse(_gen(), media_type="text/event-stream", headers=_SSE_HEADERS)

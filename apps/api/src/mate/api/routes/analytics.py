@@ -10,25 +10,38 @@ from __future__ import annotations
 
 import contextlib
 import json
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, Literal
 
 import structlog
 from fastapi import APIRouter, HTTPException, Request, Response, status
-from fastapi.responses import StreamingResponse
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, func, select
+from sqlalchemy import ColumnElement, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.background import BackgroundTask
 
 from mate.api.auth import CurrentUserDep
 from mate.api.config import get_settings
 from mate.api.db.models import (
     AnalyticsEvent,
+    AnalyticsObject,
+    AnalyticsObjectRelation,
     AnalyticsSession,
     UserSetting,
 )
 from mate.api.db.session import SessionDep
+from mate.api.schemas.common import UtcDateTime, utc_isoformat
+from mate.api.services.analytics_objects import (
+    ObjectRef,
+    derive_client_objects,
+    derive_server_objects,
+    persist_event_objects,
+)
 
 log = structlog.get_logger(__name__)
 # Path deliberately neutral (`/usage` instead of `/analytics`) so default
@@ -56,7 +69,13 @@ class AnalyticsConfigPayload(BaseModel):
     capture_clicks: bool = True
     capture_perf: bool = True
     capture_errors: bool = True
-    opted_in_at: datetime | None = None
+    # UI-log capture kinds (Abb & Rehse reference model). Input values are
+    # always hard-redacted for password/opted-out fields regardless of the
+    # flag; keyboard capture is combos + special keys only, never plain typing.
+    capture_inputs: bool = True
+    capture_keyboard: bool = True
+    capture_pointer: bool = True
+    opted_in_at: UtcDateTime | None = None
     anon_user_id_seed: str = Field(default_factory=lambda: str(uuid.uuid4()))
     # Read-only: surfaced from the USER_TRACKING_ONBOARDING env var so the
     # frontend can pick the onboarding default and hide the privacy step/tab
@@ -97,6 +116,27 @@ async def _save_config(
     else:
         row.value_json = data
     await session.commit()
+    _consent_cache.pop(user_id, None)
+    return cfg
+
+
+# Short-lived per-user consent cache so the all-requests usage middleware and
+# the batched server-event writer don't pay one ``UserSetting`` SELECT per
+# recorded event. Invalidated on every config save/wipe; the TTL bounds
+# staleness for cross-process changes (single-process deployment in practice).
+_CONSENT_TTL_SECONDS = 60.0
+_consent_cache: dict[str, tuple[AnalyticsConfigPayload, float]] = {}
+
+
+async def cached_config(session: AsyncSession, user_id: str) -> AnalyticsConfigPayload:
+    """Effective analytics config for ``user_id`` with a small TTL cache."""
+    now = time.monotonic()
+    hit = _consent_cache.get(user_id)
+    if hit is not None and hit[1] > now:
+        return hit[0]
+    row = await session.get(UserSetting, (user_id, ANALYTICS_CONFIG_KEY))
+    cfg = _effective(_load_config(row))
+    _consent_cache[user_id] = (cfg, now + _CONSENT_TTL_SECONDS)
     return cfg
 
 
@@ -134,6 +174,7 @@ async def record_server_event(
     path: str | None = None,
     duration_ms: int | None = None,
     properties: dict[str, Any] | None = None,
+    objects: list[ObjectRef] | None = None,
 ) -> None:
     """Append a backend-emitted analytics event, gated by the user's consent.
 
@@ -141,29 +182,43 @@ async def record_server_event(
     under ``on``/``off`` and is always-on under ``force``). Wrapped so a
     tracking failure can never break the request or job it describes. Commits
     on the passed session - callers should hand it a session they own.
+
+    ``objects`` lets callers attach extra OCEL object refs (e.g. the job a
+    ``job`` event describes) beyond the ones derived from path/properties.
     """
     try:
-        cfg_row = await session.get(UserSetting, (user_id, ANALYTICS_CONFIG_KEY))
-        cfg = _effective(_load_config(cfg_row))
+        cfg = await cached_config(session, user_id)
         if not cfg.enabled:
             return
         now = datetime.now(UTC).replace(tzinfo=None)
-        session.add(
-            AnalyticsEvent(
-                user_id=user_id,
-                # Backend events have no browser session; a sentinel keeps the
-                # NOT NULL column satisfied and lets queries filter them out.
-                session_id="server",
-                anon_user_id=cfg.anon_user_id_seed,
-                source="server",
-                event_type=event_type[:32],
-                event_name=event_name[:128],
-                duration_ms=duration_ms,
-                path=(path or None) and path[:512],
-                properties=properties,
-                occurred_at=now,
-                server_received_at=now,
-            )
+        event = AnalyticsEvent(
+            user_id=user_id,
+            # Backend events have no browser session; a sentinel keeps the
+            # NOT NULL column satisfied and lets queries filter them out.
+            session_id="server",
+            anon_user_id=cfg.anon_user_id_seed,
+            source="server",
+            event_type=event_type[:32],
+            event_name=event_name[:128],
+            duration_ms=duration_ms,
+            path=(path or None) and path[:512],
+            properties=properties,
+            occurred_at=now,
+            server_received_at=now,
+        )
+        session.add(event)
+        await session.flush()
+        refs, relations = derive_server_objects(
+            path=path,
+            properties=properties,
+            anon_user_id=cfg.anon_user_id_seed,
+            extra=objects,
+        )
+        await persist_event_objects(
+            session,
+            user_id=user_id,
+            event_refs=[(event.id, refs)],
+            relations=relations,
         )
         await session.commit()
     except Exception:
@@ -177,7 +232,48 @@ async def record_server_event(
 # --------------------------------------------------------------------------
 
 
-EventType = Literal["page", "click", "custom", "error", "perf", "form"]
+EventType = Literal[
+    "page",
+    "click",
+    "custom",
+    "error",
+    "perf",
+    "form",
+    # UI-log action families (Abb & Rehse model): committed input values,
+    # keyboard combos, sampled pointer traces/scrolls, clipboard ops,
+    # drag/drop, and viewport/visibility changes.
+    "input",
+    "key",
+    "pointer",
+    "clipboard",
+    "drag",
+    "view",
+]
+
+# Server-side re-truncation caps - the client already caps these, but the
+# ingest endpoint is authenticated-public so the server enforces its own
+# bounds. Keys not listed fall back to the generic cap.
+_PROP_CAPS = {"selector": 400, "input_value": 256, "text": 160, "activity": 200}
+_PROP_GENERIC_CAP = 2000
+_PROP_MAX_POINTS = 60
+
+
+def _truncate_props(props: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Defensively bound every string (and the pointer-trace point list)."""
+    if not isinstance(props, dict):
+        return None
+
+    def _bound(key: str, value: Any) -> Any:
+        if isinstance(value, str):
+            return value[: _PROP_CAPS.get(key, _PROP_GENERIC_CAP)]
+        if isinstance(value, dict):
+            return {k: _bound(k, v) for k, v in value.items()}
+        if isinstance(value, list):
+            capped = value[:_PROP_MAX_POINTS] if key == "points" else value[:100]
+            return [_bound(key, v) for v in capped]
+        return value
+
+    return {k: _bound(k, v) for k, v in props.items()}
 
 
 class IngestEvent(BaseModel):
@@ -214,8 +310,7 @@ async def ingest_events(request: Request, session: SessionDep, user: CurrentUser
     works without triggering a CORS preflight). Rejects with 204 if analytics
     is disabled - this is the privacy safety net independent of the client.
     """
-    cfg_row = await session.get(UserSetting, (user.id, ANALYTICS_CONFIG_KEY))
-    cfg = _effective(_load_config(cfg_row))
+    cfg = await cached_config(session, user.id)
     if not cfg.enabled:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -246,6 +341,10 @@ async def ingest_events(request: Request, session: SessionDep, user: CurrentUser
     if sess_row is not None and sess_row.user_id != user.id:
         # Another user's session id collision - refuse silently.
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+    # Pointer traces are excluded from the session's event_count so "avg
+    # events per session" stays a measure of discrete interactions, not of
+    # how long the mouse moved.
+    counted = sum(1 for e in payload.events if e.event_type != "pointer")
     if sess_row is None:
         sess_row = AnalyticsSession(
             id=payload.session.id,
@@ -254,12 +353,12 @@ async def ingest_events(request: Request, session: SessionDep, user: CurrentUser
             started_at=_naive(payload.session.started_at),
             last_seen_at=now,
             entry_path=payload.session.entry_path,
-            event_count=len(payload.events),
+            event_count=counted,
         )
         session.add(sess_row)
     else:
         sess_row.last_seen_at = now
-        sess_row.event_count = (sess_row.event_count or 0) + len(payload.events)
+        sess_row.event_count = (sess_row.event_count or 0) + counted
 
     rows = [
         AnalyticsEvent(
@@ -271,7 +370,7 @@ async def ingest_events(request: Request, session: SessionDep, user: CurrentUser
             event_name=e.event_name[:128],
             path=(e.path or None) and e.path[:512],
             referrer=(e.referrer or None) and e.referrer[:512],
-            properties=e.properties,
+            properties=_truncate_props(e.properties),
             viewport_w=payload.session.viewport_w,
             viewport_h=payload.session.viewport_h,
             ua_class=payload.session.ua_class,
@@ -283,6 +382,24 @@ async def ingest_events(request: Request, session: SessionDep, user: CurrentUser
         for e in payload.events
     ]
     session.add_all(rows)
+    # Materialise the OCEL object layer (Abb & Rehse model): flush for event
+    # ids, then upsert ui_element/ui_group/application/system/user/task rows,
+    # their part_of hierarchy, and the event->object links.
+    await session.flush()
+    event_refs: list[tuple[int, list[ObjectRef]]] = []
+    all_relations: set[tuple[str, str, str]] = set()
+    for row in rows:
+        refs, relations = derive_client_objects(
+            path=row.path,
+            properties=row.properties,
+            anon_user_id=payload.session.anon_user_id,
+            ua_class=payload.session.ua_class,
+        )
+        event_refs.append((row.id, refs))
+        all_relations |= relations
+    await persist_event_objects(
+        session, user_id=user.id, event_refs=event_refs, relations=all_relations
+    )
     await session.commit()
     return Response(status_code=status.HTTP_202_ACCEPTED)
 
@@ -308,8 +425,8 @@ class AnalyticsSummary(BaseModel):
     total_events: int
     total_sessions: int
     sessions_last_30d: int
-    oldest_event: datetime | None
-    newest_event: datetime | None
+    oldest_event: UtcDateTime | None
+    newest_event: UtcDateTime | None
     by_type: list[TypeCount]
 
 
@@ -395,6 +512,12 @@ async def wipe_events(session: SessionDep, user: CurrentUserDep) -> WipeResponse
     ) or 0
     await session.execute(delete(AnalyticsEvent).where(AnalyticsEvent.user_id == user.id))
     await session.execute(delete(AnalyticsSession).where(AnalyticsSession.user_id == user.id))
+    # E2O rows cascade with their events; the object registry + O2O hierarchy
+    # are user-keyed and need explicit deletes.
+    await session.execute(delete(AnalyticsObject).where(AnalyticsObject.user_id == user.id))
+    await session.execute(
+        delete(AnalyticsObjectRelation).where(AnalyticsObjectRelation.user_id == user.id)
+    )
 
     cfg_row = await session.get(UserSetting, (user.id, ANALYTICS_CONFIG_KEY))
     cfg = _load_config(cfg_row)
@@ -433,14 +556,44 @@ def event_to_dict(ev: AnalyticsEvent) -> dict[str, Any]:
         "ua_class": ev.ua_class,
         "locale": ev.locale,
         "tz": ev.tz,
-        "occurred_at": ev.occurred_at.isoformat(),
-        "server_received_at": ev.server_received_at.isoformat(),
+        "occurred_at": utc_isoformat(ev.occurred_at),
+        "server_received_at": utc_isoformat(ev.server_received_at),
     }
 
 
+ExportFormat = Literal["ndjson", "ocel-json", "ocel-sqlite", "ocel-xml"]
+
+
 @router.get("/export")
-async def export_events(session: SessionDep, user: CurrentUserDep) -> StreamingResponse:
-    """NDJSON dump of every event row, oldest first."""
+async def export_events(
+    session: SessionDep, user: CurrentUserDep, format: ExportFormat = "ndjson"
+) -> Response:
+    """Dump the caller's UI log - flat NDJSON (default) or object-centric OCEL 2.0.
+
+    The OCEL variants (Abb & Rehse reference model, ocel-standard.org 2.0
+    JSON/SQLite/XML) are written by pm4py to a private temp file that is
+    deleted once the download finishes; the same library reads them back, so an
+    export re-imports into Mate as an OCEL event log.
+    """
+    if format != "ndjson":
+        from mate.api.services import analytics_ocel
+
+        fmt = format.removeprefix("ocel-")
+        assert fmt in ("json", "sqlite", "xml")
+        filters: list[ColumnElement[bool]] = [AnalyticsEvent.user_id == user.id]
+        frame = await analytics_ocel.load_ui_log(session, filters)
+        if not frame.events:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No events to export")
+        path = await run_in_threadpool(
+            lambda: analytics_ocel.write_ocel_tmp(analytics_ocel.build_ocel(frame), fmt)
+        )
+        return FileResponse(
+            path,
+            media_type=analytics_ocel.media_type(fmt),
+            filename=analytics_ocel.download_name(fmt),
+            background=BackgroundTask(_unlink_quiet, path),
+        )
+
     rows = (
         (
             await session.execute(
@@ -462,6 +615,11 @@ async def export_events(session: SessionDep, user: CurrentUserDep) -> StreamingR
         media_type="application/x-ndjson",
         headers={"Content-Disposition": 'attachment; filename="analytics-export.ndjson"'},
     )
+
+
+def _unlink_quiet(path: Path) -> None:
+    with contextlib.suppress(FileNotFoundError):
+        path.unlink()
 
 
 # --------------------------------------------------------------------------
@@ -497,6 +655,22 @@ async def prune_expired(session: SessionDep) -> int:
             delete(AnalyticsSession).where(
                 AnalyticsSession.user_id == cfg_row.user_id,
                 AnalyticsSession.last_seen_at < cutoff,
+            )
+        )
+        # Objects unseen for the whole window carry no events any more (their
+        # E2O rows cascaded away with the pruned events) - drop them plus any
+        # hierarchy rows that now reference a vanished object.
+        await session.execute(
+            delete(AnalyticsObject).where(
+                AnalyticsObject.user_id == cfg_row.user_id,
+                AnalyticsObject.last_seen_at < cutoff,
+            )
+        )
+        alive = select(AnalyticsObject.object_id).where(AnalyticsObject.user_id == cfg_row.user_id)
+        await session.execute(
+            delete(AnalyticsObjectRelation).where(
+                AnalyticsObjectRelation.user_id == cfg_row.user_id,
+                AnalyticsObjectRelation.src_object_id.not_in(alive),
             )
         )
         total_removed += int(result.rowcount or 0)

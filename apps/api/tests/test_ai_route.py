@@ -16,8 +16,11 @@ from mate.api.ai_nav import (
     ProcessInfo,
     _coerce_routing,
     _derive_keywords,
+    build_destination_catalog,
     current_destination,
     match_process,
+    module_destination,
+    module_routing_text,
     prefilter,
     resolve_action,
     resolve_targets,
@@ -153,7 +156,12 @@ def test_coerce_defaults_garbage_to_chat() -> None:
 
 def test_coerce_extracts_process_hint() -> None:
     out = _coerce_routing(
-        {"intent": "navigate", "targets": ["performance"], "process": "Order Process", "confidence": 0.9},
+        {
+            "intent": "navigate",
+            "targets": ["performance"],
+            "process": "Order Process",
+            "confidence": 0.9,
+        },
         {"performance"},
     )
     assert out["process"] == "Order Process"
@@ -167,6 +175,110 @@ def test_derive_keywords_from_name_and_provides() -> None:
     assert "performance" in kws
     assert "kpis" in kws
     assert all(len(k) >= 3 for k in kws)
+
+
+# ── module routing context (about / description) ─────────────────────────────
+
+
+def test_module_routing_text_prefers_about() -> None:
+    assert module_routing_text("rich about", "terse desc", "Name") == "rich about"
+    assert module_routing_text(None, "terse desc", "Name") == "terse desc"
+    assert module_routing_text(None, None, "Name") == "Name"
+
+
+def test_module_destination_uses_about_as_routing_context() -> None:
+    # A manifest whose ONLY bottleneck signal lives in `about`, not the terse
+    # `description` and with no explicit keywords: the routing context (and the
+    # derived pre-filter keywords) must come from `about`.
+    dest = module_destination(
+        "performance",
+        "Performance",
+        about="Find out where your process loses time and locate slow bottlenecks.",
+        description="Speed metrics.",
+        keywords=None,
+        provides=["perf.kpis"],
+    )
+    assert dest.kind == "module"
+    assert dest.requires_log is True
+    assert dest.href_template == "/processes/{log_id}/modules/performance"
+    # `about` (not the terse description) is what the classifier catalogue sees.
+    assert "loses time" in dest.description
+    # Its distinctive tokens leak into the derived pre-filter keywords.
+    assert "bottlenecks" in dest.keywords
+
+
+def test_module_destination_falls_back_to_description_without_about() -> None:
+    dest = module_destination(
+        "complexity",
+        "Complexity",
+        about=None,
+        description="Entropy-based complexity metrics over variants.",
+        keywords=None,
+        provides=[],
+    )
+    assert dest.description == "Entropy-based complexity metrics over variants."
+    assert "entropy" in dest.keywords
+
+
+def test_module_destination_explicit_keywords_win() -> None:
+    dest = module_destination(
+        "discovery",
+        "Discovery",
+        about="Mine your event log into a process map.",
+        description="Process model.",
+        keywords=["dfg", "petri net", "bpmn"],
+        provides=["discovery.dfg"],
+    )
+    # Author-declared keywords are used verbatim, not derived from about/name.
+    assert dest.keywords == ["dfg", "petri net", "bpmn"]
+    # `about` still supplies the classifier catalogue description.
+    assert "process map" in dest.description
+
+
+def test_build_destination_catalog_surfaces_about() -> None:
+    # The classifier prompt must carry the module's `about` so a stated goal can
+    # be matched to the right module by the LLM.
+    dest = module_destination(
+        "conformance",
+        "Conformance Checking",
+        about="Check whether reality follows the rules by replaying cases.",
+        description="Fitness and precision.",
+        keywords=None,
+        provides=[],
+    )
+    catalog = build_destination_catalog([dest])
+    assert "reality follows the rules" in catalog
+
+
+def test_route_intent_routes_stated_goal_to_module_from_about(monkeypatch) -> None:
+    # End-to-end: a goal ("find where we lose time") reaches the classifier, which
+    # picks the performance module built purely from its `about` text; the target
+    # resolves to that module's panel for the current log.
+    perf = module_destination(
+        "performance",
+        "Performance",
+        about="Find out where your process loses time and locate bottlenecks.",
+        description="Speed metrics.",
+        keywords=None,
+        provides=["perf.kpis"],
+    )
+
+    async def _fake(cfg, *, message, destinations, processes=None):
+        # Assert the destination the classifier is handed actually carries `about`.
+        assert any("loses time" in d.description for d in destinations)
+        return {"intent": "navigate", "targets": ["performance"], "confidence": 0.9}
+
+    monkeypatch.setattr(ai_nav, "classify_intent", _fake)
+    res = asyncio.run(
+        route_intent(
+            _cfg(),
+            message="where does my process lose the most time",
+            destinations=[perf],
+            log_id="L9",
+        )
+    )
+    assert res.intent == "navigate"
+    assert res.targets[0].href == "/processes/L9/modules/performance"
 
 
 # ── full orchestration (LLM stubbed) ─────────────────────────────────────────
@@ -219,9 +331,7 @@ def test_route_intent_skips_llm_for_unambiguous_nav(monkeypatch) -> None:
 
     monkeypatch.setattr(ai_nav, "classify_intent", _boom)
     res = asyncio.run(
-        route_intent(
-            _cfg(), message="open the performance module", destinations=DESTS, log_id="L1"
-        )
+        route_intent(_cfg(), message="open the performance module", destinations=DESTS, log_id="L1")
     )
     assert res.intent == "navigate"
     assert [t.id for t in res.targets] == ["performance"]
@@ -237,9 +347,7 @@ def test_route_intent_calls_llm_for_ambiguous_message(monkeypatch) -> None:
 
     monkeypatch.setattr(ai_nav, "classify_intent", _fake)
     res = asyncio.run(
-        route_intent(
-            _cfg(), message="the cycle time looks high", destinations=DESTS, log_id="L1"
-        )
+        route_intent(_cfg(), message="the cycle time looks high", destinations=DESTS, log_id="L1")
     )
     assert called["n"] == 1
     assert res.intent == "both"
@@ -323,8 +431,16 @@ def test_resolve_action_rejects_invalid_values() -> None:
 
 def test_resolve_action_rejects_blocked_and_malformed_settings() -> None:
     # Sensitive / non-whitelisted settings must never resolve, even if the model emits them.
-    for blocked in ("allow_process_data", "api_key", "system_prompt", "analytics_enabled",
-                    "selected_model", "password", "email", "completed"):
+    for blocked in (
+        "allow_process_data",
+        "api_key",
+        "system_prompt",
+        "analytics_enabled",
+        "selected_model",
+        "password",
+        "email",
+        "completed",
+    ):
         assert resolve_action({"setting": blocked, "value": "true"}) is None
     assert resolve_action(None) is None
     assert resolve_action("nope") is None
@@ -434,9 +550,7 @@ def test_route_intent_swallows_classifier_errors(monkeypatch) -> None:
 
     monkeypatch.setattr(ai_nav, "classify_intent", _fail)
     res = asyncio.run(
-        route_intent(
-            _cfg(), message="the cycle time looks high", destinations=DESTS, log_id="L1"
-        )
+        route_intent(_cfg(), message="the cycle time looks high", destinations=DESTS, log_id="L1")
     )
     assert res.intent == "chat"
     assert res.targets == []

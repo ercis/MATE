@@ -14,9 +14,16 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -27,6 +34,36 @@ import {
   useRemoveShare,
   useShareTargets,
 } from "@/lib/sharing-queries";
+
+/**
+ * Wraps a Share control that is disabled because the user is in no team
+ * (`noTeam` from `useNoShareTargets`). Instead of hiding the control or letting
+ * it open a dialog that can't do anything, the control stays visible but
+ * disabled, and this gate adds the "why" tooltip. Pass the control with its
+ * `disabled={noTeam}` prop set; the span wrapper keeps hover/focus events alive
+ * for the tooltip (a natively disabled button swallows them).
+ */
+export function NoTeamShareGate({
+  noTeam,
+  children,
+}: {
+  noTeam: boolean;
+  children: React.ReactNode;
+}) {
+  if (!noTeam) return <>{children}</>;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span tabIndex={0} className="inline-flex cursor-not-allowed">
+          {children}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">
+        Join a team to share. Ask an admin to add you to a team.
+      </TooltipContent>
+    </Tooltip>
+  );
+}
 
 export function ShareDialog({
   dashboardId,
@@ -48,6 +85,8 @@ export function ShareDialog({
   // Don't offer a target that's already shared with.
   const sharedKeys = new Set((shares.data ?? []).map((s) => `${s.kind}:${s.target_id}`));
   const available = (targets.data ?? []).filter((t) => !sharedKeys.has(`${t.kind}:${t.id}`));
+  const availableTeams = available.filter((t) => t.kind === "team");
+  const availableMembers = available.filter((t) => t.kind !== "team");
 
   const onAdd = async () => {
     if (!selected) return;
@@ -76,8 +115,7 @@ export function ShareDialog({
         <DialogHeader>
           <DialogTitle>Share "{dashboardName}"</DialogTitle>
           <DialogDescription>
-            Give other members read-only access to this dashboard. They can view it and its
-            data but can't edit it.
+            Give other members read-only access to this dashboard.
           </DialogDescription>
         </DialogHeader>
 
@@ -101,21 +139,43 @@ export function ShareDialog({
                     Everyone available is already added.
                   </div>
                 ) : (
-                  available.map((t) => (
-                    <SelectItem key={`${t.kind}:${t.id}`} value={`${t.kind}:${t.id}`}>
-                      <span className="flex items-center gap-2">
-                        {t.kind === "team" ? (
-                          <Users className="h-3.5 w-3.5 text-muted-foreground" />
-                        ) : (
-                          <UserIcon className="h-3.5 w-3.5 text-muted-foreground" />
-                        )}
-                        {t.label}
-                        {t.kind === "user" && t.sublabel ? (
-                          <span className="text-xs text-muted-foreground">{t.sublabel}</span>
-                        ) : null}
-                      </span>
-                    </SelectItem>
-                  ))
+                  <>
+                    {availableTeams.length > 0 && (
+                      <SelectGroup>
+                        <SelectLabel className="flex items-center gap-1.5">
+                          <Users className="h-3 w-3" />
+                          Teams
+                        </SelectLabel>
+                        {availableTeams.map((t) => (
+                          <SelectItem key={`${t.kind}:${t.id}`} value={`${t.kind}:${t.id}`}>
+                            <span className="flex items-center gap-2">
+                              <Users className="h-3.5 w-3.5 text-muted-foreground" />
+                              {t.label}
+                            </span>
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    )}
+                    {availableMembers.length > 0 && (
+                      <SelectGroup>
+                        <SelectLabel className="flex items-center gap-1.5">
+                          <UserIcon className="h-3 w-3" />
+                          Members
+                        </SelectLabel>
+                        {availableMembers.map((t) => (
+                          <SelectItem key={`${t.kind}:${t.id}`} value={`${t.kind}:${t.id}`}>
+                            <span className="flex items-center gap-2">
+                              <UserIcon className="h-3.5 w-3.5 text-muted-foreground" />
+                              {t.label}
+                              {t.sublabel ? (
+                                <span className="text-xs text-muted-foreground">{t.sublabel}</span>
+                              ) : null}
+                            </span>
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    )}
+                  </>
                 )}
               </SelectContent>
             </Select>

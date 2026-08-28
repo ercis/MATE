@@ -1,9 +1,8 @@
-import os
 import argparse
+import os
+
 import tensorflow as tf
-
 import utils.prediction as pred
-
 
 if __name__ == "__main__":
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"

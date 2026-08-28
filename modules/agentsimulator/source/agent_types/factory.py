@@ -1,13 +1,12 @@
 import datetime
-from typing import Dict
 
 import pytz
 
 from source.agent_types.resource_calendar import (
+    CalendarKPIInfoFactory,
+    GranuleInfo,
     RCalendar,
     int_week_days,
-    GranuleInfo,
-    CalendarKPIInfoFactory,
 )
 
 
@@ -30,7 +29,7 @@ class CalendarFactory:
         self.from_datetime = min(self.from_datetime, timestamp)
         self.to_datetime = max(self.to_datetime, timestamp)
 
-    def build_weekly_calendars(self, min_confidence, desired_support, min_participation) -> Dict[str, RCalendar]:
+    def build_weekly_calendars(self, min_confidence, desired_support, min_participation) -> dict[str, RCalendar]:
         """
         Builds a calendar for each resource in the KPI calendar, using the given parameters.
         Returns a dictionary with the resource name as key and its calendar as value.

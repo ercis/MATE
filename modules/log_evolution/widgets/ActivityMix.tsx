@@ -12,7 +12,6 @@ import {
 } from "recharts";
 
 import { colorAt, useEvolution, type Granularity, type LogEvolution } from "../panel/queries";
-import { ChartFrame, LegendDot } from "./_kit";
 
 const OTHER = "Other";
 
@@ -111,3 +110,4 @@ export default function ActivityMix({
     </ChartFrame>
   );
 }
+import {ChartFrame, LegendDot} from "@/components/dashboards/kit";

@@ -39,13 +39,13 @@ from mate.api.db.models import (
     EventLog,
     Job,
     ModuleInstall,
-    StorageConfig,
     User,
     UserSetting,
 )
 from mate.api.db.session import SessionDep
 from mate.api.ingest.storage import log_paths
 from mate.api.jobs.runtime import get_job_runtime
+from mate.api.schemas.common import UtcDateTime
 from mate.api.storage import s3 as storage_s3
 from mate.api.storage import sync as storage_sync
 from mate.api.storage.config import get_storage_settings
@@ -675,13 +675,12 @@ async def storage_insights(
         ).all()
     ]
 
-    cfg = await session.get(StorageConfig, StorageConfig.SINGLETON_ID)
-    mode = cfg.mode if cfg is not None else "local"
     s3_used: int | None = None
     s3_objects: int | None = None
     s3_quota: int | None = None
     s3_error: str | None = None
     s = get_storage_settings()
+    mode = s.mode
     if s.is_s3:
         s3_quota = s.quota_bytes
         try:
@@ -944,10 +943,10 @@ class AdminLogRow(BaseModel):
     events_count: int | None
     cases_count: int | None
     objects_count: int | None
-    date_min: datetime | None
-    date_max: datetime | None
-    created_at: datetime
-    imported_at: datetime | None
+    date_min: UtcDateTime | None
+    date_max: UtcDateTime | None
+    created_at: UtcDateTime
+    imported_at: UtcDateTime | None
     folder_id: str | None
 
 
@@ -1057,9 +1056,10 @@ async def download_event_log(log_id: str, user: AdminUserDep, session: SessionDe
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event log not found")
 
     paths = log_paths(log_id, row.user_id)
-    # The retained upload may live only in S3 on a cold cache - pull the log dir
-    # back before locating it (no-op in local mode), mirroring re-import.
-    await storage_sync.hydrate_log(row.user_id, log_id)
+    # The retained upload may live only in S3 on a cold cache - pull just the
+    # original (this serves the file; it never reads the parquet) before locating
+    # it. No-op in local mode.
+    await storage_sync.hydrate_original(row.user_id, log_id)
     located = paths.find_original()
     if located is None or not located.exists():
         raise HTTPException(

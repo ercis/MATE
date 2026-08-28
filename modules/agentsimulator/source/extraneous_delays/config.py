@@ -1,11 +1,12 @@
 import enum
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
 
 import pandas as pd
 from lxml.etree import ElementTree
+
 from source.extraneous_delays.concurrency_oracle import ConcurrencyThresholds
 from source.extraneous_delays.event_log import DEFAULT_CSV_IDS, EventLogIDs
 

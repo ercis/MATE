@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
 
 from ..state.schema import ContextSnippet, GraphState
 from ..utils.embeddings import Embedder
@@ -64,7 +63,7 @@ def run_context_retrieval_agent(
         logging.error("Embedding call failed: %s", detail)
         return {"error_message": f"Embedding failed: {detail}"}
 
-    temporal_filter: Optional[dict] = None
+    temporal_filter: dict | None = None
     try:
         start_date = datetime.fromisoformat(drift_info["start_timestamp"])
         filter_start = start_date - timedelta(days=WINDOW_BEFORE)

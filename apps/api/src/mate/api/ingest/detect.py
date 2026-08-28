@@ -24,6 +24,13 @@ from pathlib import Path
 import structlog
 from lxml import etree
 
+from mate.api.ingest.compression import (
+    decompressed,
+    detect_compression,
+    resolve_zip_member,
+    split_compression,
+)
+
 log = structlog.get_logger(__name__)
 
 # OcelFlavor is the OCEL sub-format that selects the pm4py reader.
@@ -37,15 +44,8 @@ _JSON_SNIFF_BYTES = 256 * 1024
 _XML_SNIFF_LIMIT = 20000
 
 
-def detect_format(filename: str) -> str:
-    """Map a filename to a *coarse* source format.
-
-    ``.json`` / ``.xml`` are ambiguous (case-centric vs OCEL) and resolved later
-    by :func:`sniff_format`; this only narrows to the family.
-    """
-    lower = filename.lower()
-    if lower.endswith(".xes.gz"):
-        return "xes.gz"
+def _detect_inner(lower: str) -> str | None:
+    """Classify an (already compression-stripped) lowercase filename."""
     if lower.endswith(".xes"):
         return "xes"
     if lower.endswith(".csv"):
@@ -60,17 +60,53 @@ def detect_format(filename: str) -> str:
         return "xml"
     if lower.endswith(".json"):
         return "json"
-    raise ValueError(f"Unsupported file extension: {filename!r}")
+    return None
+
+
+def detect_format(filename: str) -> str:
+    """Map a filename to a *coarse* source format.
+
+    ``.json`` / ``.xml`` are ambiguous (case-centric vs OCEL) and resolved later
+    by :func:`sniff_format`; this only narrows to the family. Every format may
+    additionally be compressed (``.gz`` / ``.bz2`` / ``.xz`` / ``.zip``) - the
+    compression suffix is stripped before classifying. A bare ``data.zip`` maps
+    to the transient coarse format ``"zip"``: its inner format is resolved from
+    the archive's single member by :func:`sniff_format` after staging.
+    """
+    lower = filename.lower()
+    # Legacy special case: `.xes.gz` stays its own source_format (persisted DB
+    # rows and re-import payloads reference it).
+    if lower.endswith(".xes.gz"):
+        return "xes.gz"
+    inner, algo = split_compression(lower)
+    if algo is None:
+        fmt = _detect_inner(lower)
+        if fmt is None:
+            raise ValueError(f"Unsupported file extension: {filename!r}")
+        return fmt
+    fmt = _detect_inner(inner)
+    if fmt is not None:
+        return fmt
+    if algo == "zip":
+        return "zip"
+    raise ValueError(
+        f"Compressed upload {filename!r} hides its file type - include the inner "
+        "extension in the name (e.g. events.csv.gz)."
+    )
 
 
 def original_extension(filename: str, source_format: str) -> str:
     """The extension to store the retained upload under.
 
-    We keep the upload under its real suffix so the file stays meaningful on
-    disk and ``find_original`` can locate it. OCEL reader selection no longer
-    depends on this - :func:`sniff_format` carries the flavor explicitly.
+    We keep the upload under its real suffix (compression suffix included) so
+    the file stays byte-faithful and meaningful on disk and ``find_original``
+    can locate it. OCEL reader selection no longer depends on this -
+    :func:`sniff_format` carries the flavor explicitly.
     """
     lower = filename.lower()
+    inner, algo = split_compression(lower)
+    comp_suffix = lower[len(inner) + 1 :] if algo is not None else ""
+    base = inner if algo is not None else lower
     for ext in (
         "xes.gz",
         "xes",
@@ -82,14 +118,17 @@ def original_extension(filename: str, source_format: str) -> str:
         "xml",
         "json",
     ):
-        if lower.endswith(f".{ext}"):
-            return ext
+        if base.endswith(f".{ext}"):
+            return f"{ext}.{comp_suffix}" if comp_suffix else ext
+    if algo == "zip":
+        return "zip"
     # Fall back to the coarse format for anything without a recognised suffix.
     return "ocel" if source_format == "ocel" else source_format
 
 
 def _ocel_flavor_from_extension(filename: str) -> OcelFlavor:
-    lower = filename.lower()
+    # Strip a compression suffix first so `log.xmlocel.gz` still reads as xml.
+    lower = split_compression(filename.lower())[0]
     if lower.endswith(".sqlite") or lower.endswith(".ocelsqlite"):
         return "sqlite"
     if lower.endswith(".xmlocel"):
@@ -156,11 +195,28 @@ def sniff_format(
 
     Returns ``(source_format, ocel_flavor)`` where ``ocel_flavor`` is set only
     for OCEL logs. Unambiguous families (xes / xes.gz / csv) pass through
-    untouched.
+    untouched. Compressed uploads are content-sniffed on a decompressed temp
+    copy; a bare ``"zip"`` coarse format resolves to its single member's format
+    first (raising ``ValueError`` for empty/ambiguous archives).
     """
     name = filename or path.name
+    if coarse == "zip":
+        member = resolve_zip_member(path)
+        name = member.rsplit("/", 1)[-1]
+        coarse = detect_format(name)
+        if coarse == "zip":  # zip-in-zip: unwrapped by `decompressed` below
+            raise ValueError("Nested zip archives are not supported.")
+    # The content probes below need plain bytes; everything else passes through
+    # on the extension alone.
     if coarse == "ocel":
         return "ocel", _ocel_flavor_from_extension(name)
+    if coarse in {"xml", "json"} and detect_compression(path) is not None:
+        with decompressed(path) as plain:
+            return _sniff_content(plain, coarse)
+    return _sniff_content(path, coarse)
+
+
+def _sniff_content(path: Path, coarse: str) -> tuple[str, OcelFlavor | None]:
     if coarse == "xml":
         if looks_like_ocel_xml(path):
             return "ocel", "xml"

@@ -43,9 +43,10 @@ from mate.api.ai_nav import (
     list_user_processes,
     route_intent,
 )
-from mate.api.auth import CurrentUserDep
+from mate.api.auth import CurrentUserDep, get_owned_event_log
 from mate.api.db.models import UserSetting
 from mate.api.db.session import SessionDep
+from mate.api.shutdown import is_shutting_down
 
 # Re-exported so any caller that previously imported these names from
 # `routes.ai` still works. The real definitions live in `_ai_config`.
@@ -237,8 +238,14 @@ BASE_CHAT_SYSTEM_PROMPT = (
     "automatically - your text must read naturally on its own and never reference them.\n"
     "- For analytical questions, answer concisely and use any process data or "
     "context provided below. If a 'Your processes' list is given, use it to answer "
-    "questions like how many variants/cases/events a named process has. If it is not "
-    "given, you do not have access to process data - say so briefly instead of guessing."
+    "questions like how many variants/cases/events a named process has. If an "
+    "'activities & variants' list is given for the current process, use it to say "
+    "which activities exist and which paths (variants) are most common. If it is not "
+    "given, you do not have access to process data - say so briefly instead of guessing.\n"
+    "- You only ever receive modules' computed outputs and aggregate metadata - never "
+    "the raw event log. Don't claim to read individual events, cases, or the source "
+    "file; if asked for row-level detail you don't have, say so and point to the module "
+    "or tab that shows it."
 )
 
 
@@ -262,6 +269,69 @@ def _process_summary_block(processes: list[Any]) -> str:
         suffix = f" - {', '.join(stats)}" if stats else ""
         lines.append(f'- "{p.name}" (id {p.id}, {p.log_model}){suffix}')
     return "\n".join(lines)
+
+
+# How much of the current log's activity/variant catalogue to surface. Aggregate
+# data only - bounded so the prompt stays small on wide logs.
+_AI_ACTIVITIES_LIMIT = 40
+_AI_VARIANTS_LIMIT = 15
+
+
+async def _activities_variants_block(
+    log_id: str, user_id: str, active_filter: list[dict[str, Any]] | None
+) -> str:
+    """Curated, aggregate-only view of the current log (opt-in, sensitive).
+
+    Emits the activity catalogue (name + event count) and the top variant
+    *sequences* (path + case count) - exactly the aggregates the user already
+    sees in the Activities and Variants tabs. Never emits individual event rows:
+    server-side aggregation over parquet is fine; only the rolled-up result
+    reaches the model. Any failure degrades to "" so chat never breaks.
+    """
+    # Local import keeps the DuckDB symbol out of this route's import time. Both
+    # queries are plain aggregates (GROUP BY) - the same numbers the Activities
+    # and Variants tabs show; no row ever leaves the database.
+    from mate.api.modules.event_log_access import EventLogAccess
+
+    blocks: list[str] = []
+    try:
+        async with EventLogAccess(log_id, user_id, active_filter) as access:
+            act_rows = await access.duckdb_fetch(
+                "SELECT activity, COUNT(*) AS n FROM events "
+                "GROUP BY activity ORDER BY n DESC, activity ASC"
+            )
+            var_rows = await access.duckdb_fetch(
+                "WITH per_case AS ("
+                "  SELECT case_id, string_agg(activity, '→' ORDER BY timestamp) AS seq"
+                "  FROM events GROUP BY case_id"
+                "), per_variant AS ("
+                "  SELECT seq, COUNT(*) AS n FROM per_case GROUP BY seq"
+                ") SELECT seq, n, (SELECT COUNT(*) FROM per_variant) AS total"
+                " FROM per_variant ORDER BY n DESC, seq ASC"
+                f" LIMIT {int(_AI_VARIANTS_LIMIT)}"
+            )
+    except Exception:
+        return ""
+
+    if act_rows:
+        shown = act_rows[:_AI_ACTIVITIES_LIMIT]
+        head = ", ".join(f"{r[0]} ({int(r[1])})" for r in shown)
+        more = len(act_rows) - len(shown)
+        tail = f" (+{more} more)" if more > 0 else ""
+        blocks.append(f"Activities ({len(act_rows)} distinct, name + event count): {head}{tail}")
+
+    if var_rows:
+        total = int(var_rows[0][2])
+        v_lines = [f"Top variants (of {total} distinct, by case count):"]
+        for seq, n, _total in var_rows:
+            path = " → ".join((seq or "").split("→"))
+            v_lines.append(f"- {int(n)} cases: {path}")
+        blocks.append("\n".join(v_lines))
+
+    if not blocks:
+        return ""
+    header = "Current process activities & variants (aggregate, user-visible - no raw rows):"
+    return header + "\n" + "\n\n".join(blocks)
 
 
 async def _build_context_block(context: ChatContext | None, user_id: str) -> str:
@@ -298,8 +368,10 @@ async def _build_context_block(context: ChatContext | None, user_id: str) -> str
         if not callable(fn):
             continue
         # Prefer the module's curated payload over scanning raw cache keys.
+        # restrict_event_log=True walls off raw XES/parquet access: a module's
+        # guidance_payload sees only its own cached outputs, never event rows.
         try:
-            ctx = await loader._make_context(mid, context.log_id, user_id)
+            ctx = await loader._make_context(mid, context.log_id, user_id, restrict_event_log=True)
         except Exception:
             continue
         try:
@@ -422,6 +494,21 @@ async def chat(
         summary = _process_summary_block(processes)
         if summary:
             parts.append(summary)
+        # When viewing a specific process, add its activity/variant catalogue
+        # (aggregates the user already sees in-app). Ownership-checked; skipped
+        # for object-centric logs, which have no case-centric variants.
+        ctx_log_id = payload.context.log_id if payload.context else None
+        if ctx_log_id:
+            try:
+                log_row = await get_owned_event_log(session, ctx_log_id, user.id)
+            except HTTPException:
+                log_row = None
+            if log_row is not None and getattr(log_row, "log_model", None) != "object_centric":
+                av_block = await _activities_variants_block(
+                    ctx_log_id, user.id, log_row.active_filter
+                )
+                if av_block:
+                    parts.append(av_block)
 
     context_block = await _build_context_block(payload.context, user.id)
     if context_block:
@@ -445,10 +532,17 @@ async def _stream_chat(
     try:
         if provider == "anthropic":
             async for chunk in _stream_anthropic(cfg, messages):
+                # Bow out at the next delta boundary once shutdown starts, so the
+                # generator closes (and the upstream httpx stream with it) during
+                # uvicorn's connection drain instead of being force-cancelled.
+                if is_shutting_down():
+                    return
                 yield chunk
         else:
             base_url = "https://api.openai.com/v1" if provider == "openai" else (p.base_url or "")
             async for chunk in _stream_openai_compat(cfg, messages, base_url, p.api_key):
+                if is_shutting_down():
+                    return
                 yield chunk
     except httpx.HTTPError as exc:
         log.warning("ai.chat.stream_failed", provider=provider, error=str(exc))

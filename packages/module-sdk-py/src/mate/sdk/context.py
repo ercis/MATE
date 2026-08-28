@@ -148,9 +148,25 @@ class OpenEventLogProtocol(Protocol):
 
         async with await ctx.open_event_log(other_id) as other:
             df = await other.pandas()
+
+    `filters` overrides which rows that view serves, in the same
+    ``{field, op, value}`` shape as `EventLogAccessProtocol.active_filter`:
+
+    * ``None`` (default) - the log's committed Events-tab filter.
+    * a list - **replaces** the committed filter for this view only (same
+      precedence a dashboard's ephemeral filter has); ``[]`` reads the raw log.
+
+    That is what lets one module read two *differently filtered* views - the
+    same log twice under two filters is a legal A/B, e.g. two cohorts of one
+    log::
+
+        async with await ctx.open_event_log(ctx.log_id, filters=north) as a:
+            ...
     """
 
-    async def __call__(self, log_id: str) -> EventLogAccessProtocol: ...
+    async def __call__(
+        self, log_id: str, filters: list[dict[str, Any]] | None = None
+    ) -> EventLogAccessProtocol: ...
 
 
 @runtime_checkable

@@ -37,7 +37,15 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   return (
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
-      <SessionProvider>
+      {/* Keep-warm: the Keycloak access token lives 15 min and rotates only as
+          a side-effect of GET /api/auth/session (auth.ts jwt callback), so an
+          idle tab must poll or its token silently expires. 240s → at least 3
+          polls per token lifetime; Keycloak is only hit within 30s of expiry
+          (~4 refreshes/h). refetchOnWindowFocus stays on (default), covering
+          wake-from-sleep. refetchWhenOffline=false: an offline poll would just
+          flicker useSession consumers to null. Side effect: an open tab keeps
+          the SSO idle timer (8h) alive, capped by the 24h session max. */}
+      <SessionProvider refetchInterval={4 * 60} refetchWhenOffline={false}>
         <ServerStateSync />
         <QueryClientProvider client={getQueryClient()}>
           <TooltipProvider delayDuration={300}>

@@ -176,6 +176,60 @@ async def test_direct_share_dedup_and_revoke() -> None:
 
 
 @pytest.mark.asyncio
+async def test_share_carries_owner_filters_and_time_range() -> None:
+    """A shared board opens on the owner's committed column filters + time range.
+
+    The board's live filter view is persisted in ``settings`` (column_filters +
+    time_filters), which rides ``layout_json``. Because a recipient reads the
+    owner's board row through ``get_accessible_dashboard``, those filters flow to
+    them verbatim on the detail response - so their board opens filtered exactly
+    like the owner's. Recipient-side tweaks stay client-side ephemeral (no
+    per-recipient server state), and the board stays read-only (PATCH still 404s).
+    """
+    owner_column_filters = [
+        {"field": "activity", "op": "equals", "value": "Invoice received"},
+    ]
+    owner_time_filters = [
+        {"field": "timestamp", "op": "gte", "value": "2024-01-01 00:00:00"},
+        {"field": "timestamp", "op": "lte", "value": "2024-06-30 23:59:59"},
+    ]
+
+    async with _multi_user_client() as (c, state):
+        _act_as(state, OWNER_ID)
+        dash_id = (await c.post("/api/v1/dashboards", json={"name": "Filtered"})).json()["id"]
+        # Owner commits their live filter view onto the board (what autosave does).
+        r = await c.patch(
+            f"/api/v1/dashboards/{dash_id}",
+            json={
+                "settings": {
+                    "column_filters": owner_column_filters,
+                    "time_filters": owner_time_filters,
+                }
+            },
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["settings"]["column_filters"] == owner_column_filters
+
+        # Admin puts owner + recipient on a team; owner shares with it.
+        _act_as(state, ADMIN_ID, roles=("admin",))
+        team_id = (await c.post("/api/v1/admin/teams", json={"name": "Analysts"})).json()["id"]
+        for uid in (OWNER_ID, RECIPIENT_ID):
+            await c.post(f"/api/v1/admin/teams/{team_id}/members", json={"user_id": uid})
+        _act_as(state, OWNER_ID)
+        r = await c.post(f"/api/v1/dashboards/{dash_id}/shares", json={"target_team_id": team_id})
+        assert r.status_code == 201, r.text
+
+        # Recipient opens the shared board: same filters + time range, read-only.
+        _act_as(state, RECIPIENT_ID)
+        r = await c.get(f"/api/v1/dashboards/{dash_id}")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["is_owner"] is False
+        assert body["settings"]["column_filters"] == owner_column_filters
+        assert body["settings"]["time_filters"] == owner_time_filters
+
+
+@pytest.mark.asyncio
 async def test_admin_routes_require_admin_role() -> None:
     async with _multi_user_client() as (c, state):
         _act_as(state, OWNER_ID)  # plain user

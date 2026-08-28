@@ -9,6 +9,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+# The imports below reach into the module's own venv deps (pypdf et al.), which
+# the platform venv does not carry. Skip instead of failing collection so
+# `uv run pytest modules/concept_drift_explainer/tests` stays runnable from the
+# repo's toolchain; the full suite runs on the module venv.
+pytest.importorskip("pypdf")
 from modules.concept_drift_explainer.utils.ingest_documents import (
     KB_NS,
     delete_document_vectors,

@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mate.api.db.models import EventEdit, EventLog
 from mate.api.ingest.aggregation import compute_cases
 from mate.api.ingest.storage import log_paths
+from mate.api.schemas.common import utc_isoformat
 from mate.api.schemas.event_log_data import ColumnSpec, EventsHeader
 from mate.api.storage import sync as storage_sync
 
@@ -288,9 +289,11 @@ def _to_jsonable(value: Any) -> Any:
     if value is None:
         return None
     if isinstance(value, pd.Timestamp):
-        return None if pd.isna(value) else value.isoformat()
+        # Naive-UTC storage - serialize with the offset (matches `_row_dict`
+        # in the events route, so the post-edit row echo parses identically).
+        return None if pd.isna(value) else utc_isoformat(value)
     if isinstance(value, datetime):
-        return value.isoformat()
+        return utc_isoformat(value)
     if isinstance(value, float) and math.isnan(value):
         return None
     try:

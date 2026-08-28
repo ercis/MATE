@@ -44,6 +44,7 @@ def _synthetic_log(
 
 # ── case_starts ───────────────────────────────────────────────────────────────
 
+
 def test_case_starts_is_first_event_per_case():
     df = _synthetic_log(months=2, cases_per_month=3)
     starts = case_starts(df)
@@ -53,6 +54,7 @@ def test_case_starts_is_first_event_per_case():
 
 
 # ── absolute mode ─────────────────────────────────────────────────────────────
+
 
 def test_absolute_returns_requested_slice_count():
     df = _synthetic_log(months=6)
@@ -80,6 +82,7 @@ def test_absolute_metric_keys_match_compute_basic_metrics():
 
 
 # ── calendar mode ─────────────────────────────────────────────────────────────
+
 
 def test_calendar_monthly_covers_every_month_no_gaps():
     df = _synthetic_log(months=6)
@@ -117,11 +120,10 @@ def test_calendar_reindex_yields_null_gap_for_empty_period():
 
 # ── sliding mode ──────────────────────────────────────────────────────────────
 
+
 def test_sliding_windows_overlap_and_cover_span():
     df = _synthetic_log(months=4)
-    out = compute_timeseries(
-        df, "sliding", {"window": 30.0, "step": 15.0}, min_cases=1
-    )
+    out = compute_timeseries(df, "sliding", {"window": 30.0, "step": 15.0}, min_cases=1)
     assert out["mode"] == "sliding"
     assert out["params"] == {"window": 30.0, "step": 15.0}
     assert len(out["slices"]) >= 2
@@ -132,6 +134,7 @@ def test_sliding_windows_overlap_and_cover_span():
 
 
 # ── min_cases gating / null points ────────────────────────────────────────────
+
 
 def test_min_cases_blanks_thin_slices():
     df = _synthetic_log(months=6, cases_per_month=8)
@@ -152,6 +155,7 @@ def test_metric_keys_populated_even_when_all_slices_thin():
 
 # ── edge cases ────────────────────────────────────────────────────────────────
 
+
 def test_non_datetime_timestamps_are_coerced():
     df = _synthetic_log(months=3)
     df = df.copy()
@@ -171,3 +175,55 @@ def test_degenerate_single_instant_collapses_to_one_slice():
     out = compute_timeseries(df, "absolute", {"slices": 10}, min_cases=1)
     assert len(out["slices"]) == 1
     assert out["slices"][0]["n_cases"] == 4
+
+
+def test_pentland_process_overflow_is_guarded():
+    """A log whose DF-edge count dwarfs its activity count used to raise
+    OverflowError (10**huge) inside the vendored core and fail the whole
+    precompute job. It must now degrade to a None metric."""
+    from modules.complexity_over_time.complexity_core import pentland_process
+
+    acts = [f"a{i}" for i in range(70)]
+    seq: list[str] = []
+    for a in acts:
+        for b in acts:
+            seq.extend((a, b))
+    t0 = pd.Timestamp("2023-01-01")
+    df = pd.DataFrame(
+        {
+            "case_id": "c1",
+            "activity": seq,
+            "timestamp": [t0 + pd.Timedelta(seconds=i) for i in range(len(seq))],
+        }
+    )
+    assert pentland_process(df) is None
+    # And the full slice pipeline survives it (single calendar slice).
+    out = compute_timeseries(df, "calendar", {"granularity": "yearly"}, min_cases=1)
+    populated = [p for p in out["slices"] if p["metrics"] is not None]
+    assert populated
+    assert populated[0]["metrics"]["pentland_process"] is None
+
+
+def test_nat_timestamps_survive_slicing():
+    df = _synthetic_log(months=3)
+    df = df.copy()
+    df.loc[df.index[::7], "timestamp"] = pd.NaT
+    out = compute_timeseries(df, "calendar", {"granularity": "monthly"}, min_cases=1)
+    assert any(p["metrics"] is not None for p in out["slices"])
+
+
+def test_progress_callback_ticks_once_per_computed_slice():
+    df = _synthetic_log(months=6)
+    ticks: list[tuple[float, str]] = []
+    out = compute_timeseries(
+        df,
+        "calendar",
+        {"granularity": "monthly"},
+        min_cases=1,
+        progress=lambda f, m: ticks.append((f, m)),
+    )
+    computed = [p for p in out["slices"] if p["n_cases"] >= 1]
+    assert len(ticks) == len(computed)
+    fractions = [f for f, _ in ticks]
+    assert fractions == sorted(fractions)
+    assert all(0.0 <= f <= 1.0 for f in fractions)

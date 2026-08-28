@@ -8,7 +8,7 @@ import {
   Activity,
   AlertTriangle,
   ArrowUp,
-  FileText,
+  Compass,
   Lightbulb,
   ListChecks,
   RotateCcw,
@@ -27,6 +27,7 @@ import { cn } from "@/lib/cn";
 import { rawFetch } from "@/lib/api";
 import { useAiConfig } from "@/lib/ai-queries";
 import { useModules } from "@/lib/queries";
+import { useMateChat } from "@/lib/stores/mate-chat";
 import { useUi } from "@/lib/stores/ui";
 import { useTrack } from "@/lib/analytics/hooks";
 import { EV } from "@/lib/analytics/events";
@@ -59,21 +60,23 @@ interface Starter {
 }
 
 // Starters shown when there's no process context (landing, settings, etc.).
+// These are stated GOALS: each routes through /api/v1/ai/route to the matching
+// module/view, so picking one drops the user where the work happens.
 const DEFAULT_STARTERS: Starter[] = [
   {
-    icon: FileText,
-    title: "Summarize this process",
-    subtitle: "Get a quick overview of variants and bottlenecks",
-  },
-  {
-    icon: Lightbulb,
-    title: "Explain a variant",
-    subtitle: "Walk me through how a specific path flows",
-  },
-  {
     icon: Zap,
-    title: "Find bottlenecks",
-    subtitle: "Highlight the slowest steps across cases",
+    title: "Show me a bottleneck",
+    subtitle: "Open the module that finds the slowest steps",
+  },
+  {
+    icon: Workflow,
+    title: "Discover my process model",
+    subtitle: "See how your process actually flows",
+  },
+  {
+    icon: Compass,
+    title: "Suggest a module for me",
+    subtitle: "Not sure where to start? Get a recommendation",
   },
 ];
 
@@ -192,6 +195,48 @@ function genericModuleStarters(moduleName: string): Starter[] {
 // --------------------------------------------------------------------------
 // Sub-components
 // --------------------------------------------------------------------------
+
+/** The clickable starter chips. Rendered in the welcome empty state and, for
+ *  contexts the user hasn't prompted in yet (or on demand via the lightbulb
+ *  toggle), as a strip at the end of an ongoing conversation. */
+function StarterList({
+  starters,
+  disabled,
+  onPick,
+}: {
+  starters: Starter[];
+  disabled: boolean;
+  onPick: (title: string) => void;
+}) {
+  return (
+    <div className="w-full space-y-2">
+      {starters.map((s) => {
+        const Icon = s.icon;
+        return (
+          <button
+            key={s.title}
+            type="button"
+            disabled={disabled}
+            onClick={() => onPick(s.title)}
+            className={cn(
+              "group flex w-full cursor-pointer items-start gap-3 rounded-lg border border-sidebar-border bg-sidebar-accent/30 p-3 text-left transition-colors",
+              "hover:border-sidebar-border/80 hover:bg-sidebar-accent/60",
+              "disabled:cursor-not-allowed disabled:opacity-40",
+            )}
+          >
+            <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-sidebar text-sidebar-foreground/70 group-hover:text-sidebar-foreground">
+              <Icon className="h-3.5 w-3.5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-xs font-medium text-sidebar-foreground">{s.title}</div>
+              <div className="mt-0.5 text-[11px] text-sidebar-foreground/55">{s.subtitle}</div>
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 function StreamingSkeleton() {
   return (
@@ -338,6 +383,27 @@ export function MateAiSidebar() {
     return DEFAULT_STARTERS;
   }, [activeModuleId, activeModule, chatContext]);
 
+  // Key for the "has the user already prompted here?" bookkeeping. Scoped to
+  // exactly what drives the starter set: module page > process page > global.
+  const suggestionContextKey = useMemo(() => {
+    if (activeModuleId) return `module:${chatContext?.log_id ?? ""}:${activeModuleId}`;
+    if (chatContext?.log_id) return `process:${chatContext.log_id}`;
+    return "default";
+  }, [activeModuleId, chatContext]);
+
+  const usedSuggestionContexts = useMateChat((s) => s.usedSuggestionContexts);
+  const markSuggestionsUsed = useMateChat((s) => s.markSuggestionsUsed);
+  const resetSuggestionsUsage = useMateChat((s) => s.resetSuggestionsUsage);
+
+  // null = automatic (show while this context hasn't been prompted in yet);
+  // true/false = explicit user choice via the lightbulb toggle in the header.
+  const [suggestionsOverride, setSuggestionsOverride] = useState<boolean | null>(null);
+  // Moving to another context drops the manual override back to automatic.
+  useEffect(() => setSuggestionsOverride(null), [suggestionContextKey]);
+
+  const suggestionsVisible =
+    suggestionsOverride ?? !usedSuggestionContexts[suggestionContextKey];
+
   const [draft, setDraft] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [streamingContent, setStreamingContent] = useState<string | null>(null);
@@ -368,7 +434,9 @@ export function MateAiSidebar() {
       case "confidential_only":
         return s.setConfidentialOnly(value as boolean);
       case "sidebar_collapsed":
-        return s.setSidebarCollapsed(value as boolean);
+        // External contract stays "collapsed"; internally that maps to unpinned
+        // (auto mode). collapsed=false → pin the sidebar open.
+        return s.setSidebarPinned(!(value as boolean));
       case "show_unavailable_modules":
         return s.setShowUnavailableModules(value as boolean);
       case "show_disabled_modules":
@@ -405,11 +473,12 @@ export function MateAiSidebar() {
   const hasMessages = messages.length > 0 || isStreaming;
   const isConfigured = Boolean(aiConfig?.selected_provider && aiConfig?.selected_model);
 
-  // Scroll to bottom whenever content changes
+  // Scroll to bottom whenever content changes (or the suggestion strip pops
+  // in at the end of the conversation – it must be visible, not below the fold)
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, streamingContent]);
+  }, [messages, streamingContent, suggestionsVisible]);
 
   // Focus textarea when sidebar opens
   useEffect(() => {
@@ -419,6 +488,11 @@ export function MateAiSidebar() {
   const submit = async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed || isStreaming) return;
+
+    // The user has now prompted in this context – its starters stop showing
+    // automatically (they stay one lightbulb-click away).
+    markSuggestionsUsed(suggestionContextKey);
+    setSuggestionsOverride(null);
 
     track(EV.AI_CHAT_SENT, {
       provider: aiConfig?.selected_provider ?? null,
@@ -573,7 +647,7 @@ export function MateAiSidebar() {
       aria-label="MATE AI assistant"
       aria-hidden={!open}
       className={cn(
-        "flex h-full shrink-0 flex-col overflow-hidden border-l border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-300 ease-in-out",
+        "flex h-full shrink-0 flex-col overflow-hidden border-l border-white/10 [border-top-color:var(--glass-refraction-top)] bg-sidebar/85 text-sidebar-foreground backdrop-blur-xl backdrop-saturate-150 transition-[width] duration-300 ease-in-out supports-[backdrop-filter]:bg-sidebar/70",
         open ? "w-[380px]" : "w-0 border-l-0",
       )}
     >
@@ -596,17 +670,39 @@ export function MateAiSidebar() {
             </Badge>
           </div>
           {hasMessages && (
-            <button
-              type="button"
-              aria-label="New conversation"
-              onClick={() => {
-                setMessages([]);
-                setStreamingContent(null);
-              }}
-              className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-sidebar-foreground/50 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-            </button>
+            <>
+              <button
+                type="button"
+                aria-label={
+                  suggestionsVisible ? "Hide suggestions" : "Show suggestions"
+                }
+                aria-pressed={suggestionsVisible}
+                title="Suggestions for analysis"
+                onClick={() => setSuggestionsOverride(!suggestionsVisible)}
+                className={cn(
+                  "flex h-7 w-7 cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground",
+                  suggestionsVisible
+                    ? "text-sidebar-primary"
+                    : "text-sidebar-foreground/50",
+                )}
+              >
+                <Lightbulb className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                aria-label="New conversation"
+                onClick={() => {
+                  setMessages([]);
+                  setStreamingContent(null);
+                  // A fresh conversation gets fresh starters everywhere.
+                  resetSuggestionsUsage();
+                  setSuggestionsOverride(null);
+                }}
+                className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-sidebar-foreground/50 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+              </button>
+            </>
           )}
           <Button
             type="button"
@@ -650,35 +746,12 @@ export function MateAiSidebar() {
                 </div>
               )}
 
-              <div className="mt-6 w-full space-y-2">
-                {starters.map((s) => {
-                  const Icon = s.icon;
-                  return (
-                    <button
-                      key={s.title}
-                      type="button"
-                      disabled={!isConfigured || isStreaming}
-                      onClick={() => void submit(s.title)}
-                      className={cn(
-                        "group flex w-full cursor-pointer items-start gap-3 rounded-lg border border-sidebar-border bg-sidebar-accent/30 p-3 text-left transition-colors",
-                        "hover:border-sidebar-border/80 hover:bg-sidebar-accent/60",
-                        "disabled:cursor-not-allowed disabled:opacity-40",
-                      )}
-                    >
-                      <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-sidebar text-sidebar-foreground/70 group-hover:text-sidebar-foreground">
-                        <Icon className="h-3.5 w-3.5" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="text-xs font-medium text-sidebar-foreground">
-                          {s.title}
-                        </div>
-                        <div className="mt-0.5 text-[11px] text-sidebar-foreground/55">
-                          {s.subtitle}
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
+              <div className="mt-6 w-full">
+                <StarterList
+                  starters={starters}
+                  disabled={!isConfigured || isStreaming}
+                  onPick={(title) => void submit(title)}
+                />
               </div>
             </div>
           ) : (
@@ -706,6 +779,29 @@ export function MateAiSidebar() {
               )}
               {isStreaming && (
                 <AssistantBubble content={streamingContent ?? ""} isStreaming />
+              )}
+              {/* Context starters mid-conversation: automatic on the first
+                  visit to a context that hasn't been prompted in yet, or on
+                  demand via the lightbulb toggle in the header. */}
+              {suggestionsVisible && (
+                <div>
+                  <div className="mb-2 flex items-center gap-1.5 px-0.5 text-[11px] font-medium text-sidebar-foreground/50">
+                    <Lightbulb className="h-3 w-3" aria-hidden />
+                    <span>
+                      Suggestions
+                      {activeModule
+                        ? ` for ${activeModule.name}`
+                        : chatContext?.log_id
+                        ? " for this process"
+                        : ""}
+                    </span>
+                  </div>
+                  <StarterList
+                    starters={starters}
+                    disabled={!isConfigured || isStreaming}
+                    onPick={(title) => void submit(title)}
+                  />
+                </div>
               )}
               {/* Bottom anchor for auto-scroll */}
               <div className="h-px" />

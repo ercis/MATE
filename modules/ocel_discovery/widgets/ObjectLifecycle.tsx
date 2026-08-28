@@ -2,7 +2,7 @@
 
 import { useObjectsSummary } from "../panel/queries";
 import { ObjectTypeStats } from "../panel/ObjectsSummary";
-import { CardShell } from "./_kit";
+import {CardShell} from "@/components/dashboards/kit";
 
 /** Per-object-type lifecycle KPIs card (median lifecycle, avg events). */
 export default function ObjectLifecycle({ logId }: { logId: string }) {

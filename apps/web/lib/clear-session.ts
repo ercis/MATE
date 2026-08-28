@@ -23,7 +23,7 @@ const AUTH_COOKIE_BASES = [
   "authjs.callback-url",
 ];
 
-function isAuthCookie(name: string): boolean {
+export function isAuthCookie(name: string): boolean {
   const bare = name.startsWith("__Secure-") ? name.slice("__Secure-".length) : name;
   return AUTH_COOKIE_BASES.some((base) => bare === base || bare.startsWith(`${base}.`));
 }

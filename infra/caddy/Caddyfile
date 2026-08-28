@@ -10,13 +10,39 @@
 	auto_https off
 }
 
-# Bind by port (not hostname): the VM cert's name differs from the public name
-# (pm-mate), and we're behind another proxy, so match any SNI/Host.
-#
+# Bind by port (not hostname): the cert's name (pm-mate-vm) differs from the
+# public name (pm-mate), and we're behind another proxy, so match any SNI/Host.
+:443 {
 # TLS_CERT_DIR is the on-VM Let's Encrypt live dir for this host, passed in by
 # docker-compose.prod.yml from .env - it is deliberately not hardcoded here.
-:443 {
 	tls {$TLS_CERT_DIR}/fullchain.pem {$TLS_CERT_DIR}/privkey.pem
+
+	# Compress text-ish responses. The content-type allowlist deliberately
+	# omits text/event-stream: compressing SSE would buffer the live job /
+	# event streams. API JSON usually arrives pre-gzipped (GZipMiddleware);
+	# Caddy passes already-encoded responses through untouched.
+	encode zstd gzip {
+		# One header line per type: Caddy ORs multiple values of the same
+		# response-header field (v2.11 dropped the many-values-on-one-line form).
+		match {
+			header Content-Type application/json*
+			header Content-Type application/javascript*
+			header Content-Type text/html*
+			header Content-Type text/css*
+			header Content-Type image/svg+xml*
+			header Content-Type font/*
+		}
+	}
+
+	# Security headers applied to every upstream. HSTS deliberately omits
+	# includeSubDomains/preload: this is a shared uni domain, so we assert it
+	# only for this exact host. nosniff + Referrer-Policy are always safe.
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
 
 	# FastAPI backend – REST under /api/v1, plus WebSocket (live jobs/events)
 	# and SSE (Mate AI streaming). Caddy proxies both transparently.
@@ -26,6 +52,14 @@
 	# Unauthenticated liveness probe (root-level /health on the API).
 	@health path /health
 	reverse_proxy @health api:8000
+
+	# MCP server (streamable HTTP, mounted on the API at /mcp) + its RFC 9728
+	# OAuth protected-resource metadata. Both live at the API root, outside
+	# /api/v1 - without these matchers they fall through to Next.js and 404.
+	@mcp path /mcp /mcp/*
+	reverse_proxy @mcp api:8000
+	@prm path /.well-known/oauth-protected-resource
+	reverse_proxy @prm api:8000
 
 	# Keycloak, served under the /auth relative path (KC_HTTP_RELATIVE_PATH).
 	@kc path /auth/*
@@ -38,11 +72,33 @@
 	# (incl. SSE under /api/v1/*) and the hashed, immutable build assets under
 	# /_next/static + /_next/image, which must stay cacheable.
 	@webDoc {
-		not path /api/v1/* /health /auth/* /_next/static/* /_next/image*
+		not path /api/v1/* /health /auth/* /_next/static/* /_next/image* /mcp /mcp/* /.well-known/oauth-protected-resource
 	}
 	header @webDoc Cache-Control "no-store"
 
+	# Frame protection + CSP for the web app only (NOT /api, /health, or the
+	# Keycloak pages under /auth, which set their own headers). CSP ships in
+	# Report-Only first: it never blocks, it only surfaces violations in the
+	# browser console so the policy can be tightened before it is enforced.
+	# To enforce, rename the header to Content-Security-Policy and drop any
+	# 'unsafe-*' the app no longer needs.
+	@webApp not path /api/v1/* /health /auth/* /mcp /mcp/* /.well-known/oauth-protected-resource
+	header @webApp {
+		X-Frame-Options "SAMEORIGIN"
+		Content-Security-Policy-Report-Only "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'"
+	}
+
 	# Everything else – the Next.js app, its static assets, and Auth.js
 	# routes at /api/auth/*.
-	reverse_proxy web:3000
+	#
+	# Pin X-Forwarded-Proto=https so Next/Auth.js unambiguously sees HTTPS on
+	# every request (TLS terminates upstream at the uni edge proxy and here at
+	# Caddy). Without it the proto forwarded to `web` isn't guaranteed, and
+	# Auth.js can flip the `__Secure-` cookie prefix between the authorize and
+	# callback legs → the PKCE check fails with `pkceCodeVerifier value could not
+	# be parsed`. auth.ts also pins this from AUTH_URL; the two are belt-and-
+	# suspenders and must agree.
+	reverse_proxy web:3000 {
+		header_up X-Forwarded-Proto https
+	}
 }

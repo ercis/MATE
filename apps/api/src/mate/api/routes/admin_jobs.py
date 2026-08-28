@@ -17,7 +17,6 @@ See ``apps/web/app/(platform)/admin/jobs`` for the UI.
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Annotated, Any
 
 import structlog
@@ -30,6 +29,7 @@ from mate.api.db.models import EventLog, Job, User
 from mate.api.db.session import SessionDep
 from mate.api.jobs.runtime import get_job_runtime
 from mate.api.modules.job_logs import get_job_log_buffer
+from mate.api.schemas.common import UtcDateTime
 
 log = structlog.get_logger(__name__)
 router = APIRouter(prefix="/admin/jobs", tags=["admin"])
@@ -59,9 +59,9 @@ class AdminJobRow(BaseModel):
     eta_seconds: float | None
     priority: int
     parent_job_id: str | None
-    created_at: datetime
-    started_at: datetime | None
-    finished_at: datetime | None
+    created_at: UtcDateTime
+    started_at: UtcDateTime | None
+    finished_at: UtcDateTime | None
     owner_id: str
     owner_email: str | None
     owner_username: str | None
@@ -296,6 +296,20 @@ async def cancel_job(job_id: str, user: AdminUserDep) -> None:
             detail="Job cannot be cancelled - already finished or unknown.",
         )
     log.info("admin_job_cancel", admin_id=user.id, job_id=job_id)
+
+
+@router.post("/{job_id}/kill", status_code=status.HTTP_204_NO_CONTENT)
+async def kill_job(job_id: str, user: AdminUserDep) -> None:
+    """Hard-kill any user's job *now* - SIGKILL its whole process tree, skipping
+    the cooperative grace window. For a job that won't respond to a normal
+    cancel (a native compute loop with no poll point)."""
+    ok = await get_job_runtime().kill(job_id)
+    if not ok:
+        raise HTTPException(
+            status_code=409,
+            detail="Job cannot be killed - already finished or unknown.",
+        )
+    log.info("admin_job_kill", admin_id=user.id, job_id=job_id)
 
 
 @router.post("/{job_id}/retry")

@@ -1,10 +1,10 @@
 "use client";
 
+import {CardShell, KpiTile} from "@/components/dashboards/kit";
 import { formatNumber } from "@/lib/format";
 import { Badge } from "@/components/ui/badge";
 
 import { useOcelSummary } from "../panel/queries";
-import { CardShell, KpiTile } from "./_kit";
 
 /** Object types and per-type counts of the OCEL log. */
 export default function ObjectTypeSummary({ logId }: { logId: string }) {

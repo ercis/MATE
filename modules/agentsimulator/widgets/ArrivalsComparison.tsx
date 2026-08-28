@@ -21,12 +21,17 @@ export default function ArrivalsComparison({
   logId: string;
   config?: Record<string, unknown>;
 }) {
-  const { data, isLoading } = useAgentSimResults(logId);
+  const { data, isLoading, isFetching } = useAgentSimResults(logId);
   const series = data?.arrivals?.series ?? [];
   const unit = data?.arrivals?.unit ?? "day";
 
   return (
-    <CardShell loading={isLoading} empty={series.length === 0}>
+    <CardShell
+      logId={logId}
+      loading={isLoading}
+      empty={series.length === 0}
+      refreshing={isFetching}
+    >
       <div className="flex h-full min-h-0 flex-col gap-1">
         <LegendDots />
         <div className="min-h-0 flex-1">

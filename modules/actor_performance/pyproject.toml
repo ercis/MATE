@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ff-mod-actor-performance"
+version = "1.0.0"
+requires-python = ">=3.12"
+dependencies = [
+    "promg==1.0.10",
+    "neo4j>=5.15,<6",
+    "pandas>=2.2.2,<3",
+    "numpy>=1.26,<3",
+    "pyarrow>=17",
+]
+
+[tool.hatch.build.targets.wheel]
+bypass-selection = true

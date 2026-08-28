@@ -1,28 +1,26 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  Area,
-  AreaChart,
-  Cell,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
+import dynamic from "next/dynamic";
 import { Activity, Cpu, MemoryStick, Server, ShieldAlert } from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChartCardSkeleton } from "@/components/skeletons";
 import { rawFetch } from "@/lib/api";
-import type {
-  ResourceBreakdownSlice,
-  ResourceSample,
-  SystemResources,
-} from "@/lib/api-types";
+import type { ResourceBreakdownSlice, SystemResources } from "@/lib/api-types";
+
+// recharts-backed charts live in ./system-charts; load them in an async chunk so
+// this route's First Load JS stays small. ssr:false because they only render
+// client-side from data polled in the browser via rawFetch.
+const TimeAreaChart = dynamic(
+  () => import("./system-charts").then((m) => m.TimeAreaChart),
+  { ssr: false, loading: () => <ChartCardSkeleton /> },
+);
+const BreakdownDonut = dynamic(
+  () => import("./system-charts").then((m) => m.BreakdownDonut),
+  { ssr: false, loading: () => <ChartCardSkeleton /> },
+);
 
 const POLL_MS = 2000;
 
@@ -48,14 +46,6 @@ function formatBytes(n: number | null | undefined): string {
 
 function formatPct(n: number): string {
   return `${n.toFixed(n >= 10 ? 0 : 1)}%`;
-}
-
-function clockTick(ts: number): string {
-  return new Date(ts * 1000).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
 }
 
 /** Deterministic per-slice colours: idle/free capacity renders blank (light
@@ -180,57 +170,6 @@ function Readout({ value, sub }: { value: string; sub: string }) {
   );
 }
 
-function TimeAreaChart({
-  history,
-  dataKey,
-  yMax,
-  yTick,
-  tipFormat,
-}: {
-  history: ResourceSample[];
-  dataKey: "cpu_pct" | "mem_used_bytes";
-  yMax: number;
-  yTick: (v: number) => string;
-  tipFormat: (v: number) => string;
-}) {
-  return (
-    <ResponsiveContainer width="100%" height="100%">
-      <AreaChart data={history} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-        <XAxis
-          dataKey="ts"
-          tickFormatter={clockTick}
-          tick={{ fontSize: 10 }}
-          interval="preserveStartEnd"
-          minTickGap={56}
-        />
-        <YAxis
-          domain={[0, yMax]}
-          tickFormatter={yTick}
-          tick={{ fontSize: 10 }}
-          width={44}
-          allowDecimals={false}
-        />
-        <Tooltip
-          contentStyle={{ fontSize: 12 }}
-          labelFormatter={(l) => clockTick(Number(l))}
-          formatter={(v) => [tipFormat(Number(v)), ""]}
-        />
-        <Area
-          type="monotone"
-          dataKey={dataKey}
-          stroke="currentColor"
-          className="text-primary"
-          fill="currentColor"
-          fillOpacity={0.15}
-          strokeWidth={2}
-          dot={false}
-          isAnimationActive={false}
-        />
-      </AreaChart>
-    </ResponsiveContainer>
-  );
-}
-
 function CpuCard({ data }: { data: SystemResources }) {
   const { cpu, history } = data;
   return (
@@ -344,24 +283,7 @@ function BreakdownCard({
       <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="h-44 w-full sm:w-44">
           {hasData ? (
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={slices}
-                  dataKey="value"
-                  nameKey="label"
-                  innerRadius={45}
-                  outerRadius={75}
-                  strokeWidth={1}
-                  isAnimationActive={false}
-                >
-                  {slices.map((s, i) => (
-                    <Cell key={`${s.source}-${s.label}`} fill={colors[i]} />
-                  ))}
-                </Pie>
-                <Tooltip contentStyle={{ fontSize: 12 }} formatter={(v) => [format(Number(v)), ""]} />
-              </PieChart>
-            </ResponsiveContainer>
+            <BreakdownDonut slices={slices} colors={colors} format={format} />
           ) : (
             <p className="py-16 text-center text-xs text-muted-foreground">No load.</p>
           )}

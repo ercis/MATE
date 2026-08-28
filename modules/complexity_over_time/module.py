@@ -18,6 +18,7 @@ first panel open is instant.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,7 @@ _MODES = ("absolute", "calendar", "sliding")
 
 
 # ── Cache helpers (mirrors complexity / performance pattern) ─────────────────
+
 
 def _cache_is_fresh(ctx: ModuleContext, key: str) -> bool:
     cache_root = Path(ctx.cache.dir) if hasattr(ctx.cache, "dir") else None  # type: ignore[attr-defined]
@@ -100,6 +102,7 @@ def _default_key(ctx: ModuleContext) -> str:
 
 # ── Module ───────────────────────────────────────────────────────────────────
 
+
 class ComplexityOverTimeModule(Module):
     id = "complexity_over_time"
 
@@ -135,9 +138,7 @@ class ComplexityOverTimeModule(Module):
         for point in series.get("slices", []):
             metrics = point.get("metrics")
             slim_metrics = (
-                {k: metrics.get(k) for k in headline}
-                if isinstance(metrics, dict)
-                else None
+                {k: metrics.get(k) for k in headline} if isinstance(metrics, dict) else None
             )
             slim_slices.append(
                 {
@@ -203,7 +204,19 @@ class ComplexityOverTimeModule(Module):
         min_cases = _int_config(ctx, "min_cases_per_slice", 1)
         async with ctx.event_log as log:
             df = await log.pandas()
-        await ctx.progress.update(0.4, "Slicing & computing")
+        await ctx.progress.update(0.2, "Slicing & computing")
+
+        # Per-slice ticks from the compute thread (scaled into [0.2, 0.9])
+        # so a many-slice series doesn't look stalled.
+        loop = asyncio.get_running_loop()
+
+        def report(fraction: float, message: str) -> None:
+            with contextlib.suppress(RuntimeError):
+                asyncio.run_coroutine_threadsafe(
+                    ctx.progress.update(0.2 + min(max(fraction, 0.0), 1.0) * 0.7, message),
+                    loop,
+                )
+
         result = await asyncio.to_thread(
             compute_timeseries,
             df,
@@ -211,6 +224,7 @@ class ComplexityOverTimeModule(Module):
             {"granularity": "auto"},
             exponential_k=k,
             min_cases=min_cases,
+            progress=report,
         )
         await ctx.progress.update(0.95, "Caching")
         await ctx.cache.set(_default_key(ctx), result)

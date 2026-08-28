@@ -8,8 +8,6 @@ see [llm.py](./llm.py).
 
 from __future__ import annotations
 
-from typing import Dict
-
 import numpy as np
 from langchain_core.embeddings import Embeddings
 
@@ -19,7 +17,7 @@ class Embedder:
 
     def __init__(self, embeddings: Embeddings) -> None:
         self._embedder = embeddings
-        self._cache: Dict[str, np.ndarray] = {}
+        self._cache: dict[str, np.ndarray] = {}
 
     def get(self, text: str) -> np.ndarray:
         cached = self._cache.get(text)

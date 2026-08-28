@@ -23,6 +23,36 @@ export function formatDateRange(min: string | null, max: string | null): string 
   return `${fmt.format(a)} → ${fmt.format(b)}`;
 }
 
+/**
+ * Naive UTC wall-clock string (`YYYY-MM-DDTHH:MM:SS`, no offset) for an epoch.
+ *
+ * Event-log data is stored as naive-UTC timestamps in Parquet, so filter/edit
+ * literals sent to the backend (compared against DuckDB TIMESTAMP columns)
+ * must be the instant's *UTC* components without an offset suffix.
+ */
+export function toNaiveUtcString(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}` +
+    `T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`
+  );
+}
+
+/**
+ * Local wall-clock string (`YYYY-MM-DDTHH:MM:SS`) for an epoch – the value
+ * format `<input type="datetime-local">` expects, matching what
+ * `toLocaleString()` shows the user elsewhere.
+ */
+export function toLocalInputString(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+    `T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  );
+}
+
 const RELATIVE_THRESHOLDS: [number, Intl.RelativeTimeFormatUnit][] = [
   [60, "second"],
   [60 * 60, "minute"],
@@ -37,7 +67,7 @@ export function formatRelative(iso: string | null | undefined): string {
   const ts = new Date(iso).getTime();
   if (Number.isNaN(ts)) return "–";
   const deltaSec = Math.round((ts - Date.now()) / 1000);
-  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  const rtf = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
   const abs = Math.abs(deltaSec);
 
   for (let i = 0; i < RELATIVE_THRESHOLDS.length; i++) {

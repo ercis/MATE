@@ -1,7 +1,10 @@
 import os
-from source.train_test_split import split_data
+
 from source.discovery import discover_simulation_parameters
 from source.simulation import simulate_process
+from source.train_test_split import split_data
+
+
 class AgentSimulator:
     def __init__(self, params):
         self.params = params

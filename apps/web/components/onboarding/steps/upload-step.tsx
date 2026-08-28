@@ -15,7 +15,8 @@ export function UploadStep({ uploadedLogId, onUploaded }: UploadStepProps) {
       <div className="space-y-2 text-center">
         <h1 className="text-3xl font-semibold tracking-tight">Upload your first event log</h1>
         <p className="text-sm text-muted-foreground">
-          Drop a XES, XES.gz, or CSV file. You can skip this step and import later.
+          Drop a XES, XES.gz, or CSV file — case, activity and timestamp columns
+          are detected automatically. You can skip this step and import later.
         </p>
       </div>
 

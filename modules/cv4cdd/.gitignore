@@ -11,3 +11,4 @@ poetry-installer-*.log
 output/
 data/
 logs/
+model/

@@ -21,6 +21,8 @@ set.
 from __future__ import annotations
 
 import asyncio
+import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -32,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mate.api.db.models import EventLog, Job
 from mate.api.ingest.aggregation import compute_cases
+from mate.api.ingest.compression import decompressed
 from mate.api.ingest.csv_parser import parse_csv
 from mate.api.ingest.json_parser import parse_json
 from mate.api.ingest.mapping import (
@@ -39,12 +42,17 @@ from mate.api.ingest.mapping import (
     dedupe_case_insensitive_columns,
     resolve_roles,
 )
-from mate.api.ingest.ocel import parse_ocel
-from mate.api.ingest.parquet_coerce import coerce_object_columns, normalize_timestamps
+from mate.api.ingest.ocel import OcelParseResult, parse_ocel
+from mate.api.ingest.parquet_coerce import (
+    coerce_object_columns,
+    normalize_timestamps,
+    to_datetime_robust,
+)
 from mate.api.ingest.storage import LogPaths, log_paths
 from mate.api.ingest.xes import parse_xes
 from mate.api.ingest.xml_parser import parse_xml
 from mate.api.jobs.runtime import JobHandle, JobRuntime
+from mate.api.schemas.common import utc_isoformat
 from mate.api.schemas.event_logs import (
     CsvColumnMapping,
     JsonColumnMapping,
@@ -59,6 +67,89 @@ IMPORT_JOB_TYPE = "event_log.import"
 
 class IngestStats(dict[str, Any]):
     pass
+
+
+def _parse_case_centric(
+    source_format: str,
+    original_path: Path,
+    csv_mapping_data: dict[str, Any] | None,
+    xml_mapping_data: dict[str, Any] | None,
+    json_mapping_data: dict[str, Any] | None,
+    on_progress: Callable[[int], None] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any] | None]:
+    """Parse the staged upload into rows (sync; runs in a worker thread).
+
+    The staged original may be compressed (gz / bz2 / xz / zip, possibly
+    nested) - `decompressed` magic-sniffs the bytes and hands the parser a
+    plain temp copy that lives only for the duration of the parse.
+
+    ``on_progress`` is called with the running row count by the streaming
+    parsers (see `_progress_bridge`). CSV/JSON parse in one shot, so they stay
+    silent and the job's "parsing" stage remains indeterminate for them.
+    """
+    with decompressed(original_path) as src:
+        if source_format in {"xes", "xes.gz"}:
+            rows, detected = parse_xes(src, on_progress=on_progress)
+            return rows, detected, None
+        if source_format == "csv":
+            mapping = (
+                CsvColumnMapping.model_validate(csv_mapping_data) if csv_mapping_data else None
+            )
+            rows, detected, used = parse_csv(src, mapping)
+            return rows, detected, used.model_dump()
+        if source_format == "xml":
+            xml_mapping = (
+                XmlColumnMapping.model_validate(xml_mapping_data) if xml_mapping_data else None
+            )
+            rows, detected, used_xml = parse_xml(src, xml_mapping, on_progress=on_progress)
+            return rows, detected, used_xml.model_dump()
+        if source_format == "json":
+            json_mapping = (
+                JsonColumnMapping.model_validate(json_mapping_data) if json_mapping_data else None
+            )
+            rows, detected, used_json = parse_json(src, json_mapping)
+            return rows, detected, used_json.model_dump()
+    raise ValueError(f"Source format {source_format!r} is not supported in v1.")
+
+
+# Parsers tick every 1000 rows, which is far too chatty for the bus on a large
+# log. Rate-limit to one event per interval; the DB write throttles itself via
+# `settings.progress_persist_every`.
+_PARSE_PROGRESS_INTERVAL_SECONDS = 0.5
+
+
+def _progress_bridge(handle: JobHandle) -> Callable[[int], None]:
+    """Publish parser row counts from the parse thread onto the event loop.
+
+    The parsers are sync and run inside `asyncio.to_thread`, so they cannot
+    await `handle.progress`. This hands them a plain callable that schedules the
+    coroutine back on the loop, throttled, and *never raises* into the parse:
+    `handle.progress` polls the cancel token, and a cancel is already handled by
+    the `raise_if_cancelled` right after the parse returns.
+    """
+    loop = asyncio.get_running_loop()
+    state = {"last": 0.0}
+
+    def tick(count: int) -> None:
+        now = time.monotonic()
+        if now - state["last"] < _PARSE_PROGRESS_INTERVAL_SECONDS:
+            return
+        state["last"] = now
+        future = asyncio.run_coroutine_threadsafe(
+            handle.progress(count, total=None, stage="parsing", message="Reading events"),
+            loop,
+        )
+        # Retrieve the result so a cancelled/failed publish never surfaces as an
+        # "exception was never retrieved" warning at GC time.
+        future.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
+
+    return tick
+
+
+def _parse_ocel_source(original_path: Path, flavor: str) -> OcelParseResult:
+    """OCEL parse with the same transparent-decompression contract as above."""
+    with decompressed(original_path) as src:
+        return parse_ocel(src, flavor=flavor)
 
 
 async def _import_handler(handle: JobHandle) -> None:
@@ -89,31 +180,15 @@ async def _import_handler(handle: JobHandle) -> None:
         await _import_ocel(handle, log_id, original_path, paths, flavor=ocel_flavor)
         return
 
-    if source_format in {"xes", "xes.gz"}:
-        rows, detected = await asyncio.to_thread(
-            parse_xes,
-            original_path,
-            on_progress=lambda n: None,
-        )
-        effective_mapping: dict[str, Any] | None = None
-    elif source_format == "csv":
-        mapping = CsvColumnMapping.model_validate(csv_mapping_data) if csv_mapping_data else None
-        rows, detected, used = await asyncio.to_thread(parse_csv, original_path, mapping)
-        effective_mapping = used.model_dump()
-    elif source_format == "xml":
-        xml_mapping = (
-            XmlColumnMapping.model_validate(xml_mapping_data) if xml_mapping_data else None
-        )
-        rows, detected, used_xml = await asyncio.to_thread(parse_xml, original_path, xml_mapping)
-        effective_mapping = used_xml.model_dump()
-    elif source_format == "json":
-        json_mapping = (
-            JsonColumnMapping.model_validate(json_mapping_data) if json_mapping_data else None
-        )
-        rows, detected, used_json = await asyncio.to_thread(parse_json, original_path, json_mapping)
-        effective_mapping = used_json.model_dump()
-    else:
-        raise ValueError(f"Source format {source_format!r} is not supported in v1.")
+    rows, detected, effective_mapping = await asyncio.to_thread(
+        _parse_case_centric,
+        source_format,
+        original_path,
+        csv_mapping_data,
+        xml_mapping_data,
+        json_mapping_data,
+        _progress_bridge(handle),
+    )
 
     # The parser ran inside a single uninterruptible `to_thread` - cancel can't
     # land mid-parse, so an in-flight parse finishes first. Poll here, the first
@@ -164,9 +239,22 @@ async def _import_handler(handle: JobHandle) -> None:
     # winter-time events) collapse to a single tz-aware dtype instead of
     # pandas picking one offset and silently NaT-ing the rest. We then drop
     # the tz to keep the parquet / SQLite `DateTime` column shape unchanged.
-    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce", utc=True)
+    df["timestamp"] = to_datetime_robust(df["timestamp"], utc=True)
     df = df.dropna(subset=["timestamp"])
     df["timestamp"] = df["timestamp"].dt.tz_localize(None)
+    # Rows whose timestamp still failed to parse are dropped — never silently:
+    # the count is surfaced in detected_schema (meta.json + the log row).
+    rows_dropped_invalid_timestamp = total_events - len(df)
+    if rows_dropped_invalid_timestamp > 0:
+        log.warning(
+            "ingest.rows_dropped_invalid_timestamp",
+            log_id=log_id,
+            dropped=rows_dropped_invalid_timestamp,
+            total=total_events,
+        )
+    if "end_timestamp" in df.columns:
+        end_ts = to_datetime_robust(df["end_timestamp"], utc=True)
+        df["end_timestamp"] = end_ts.dt.tz_localize(None)
     df = df.sort_values(["case_id", "timestamp"], kind="mergesort").reset_index(drop=True)
 
     # Guarantee no two columns collide case-insensitively before the frame is
@@ -205,7 +293,12 @@ async def _import_handler(handle: JobHandle) -> None:
         "columns": list(df.columns),
         "source_columns": source_columns,
         "row_count": len(df),
+        "rows_dropped_invalid_timestamp": rows_dropped_invalid_timestamp,
         "column_roles": column_roles,
+        # How each role was matched (user / exact / fuzzy / fallback) - the same
+        # signal the import wizard shows as its confidence chip, kept so the
+        # log's settings can render it after the fact.
+        "column_role_quality": dict(resolution.quality),
         "mapping_needs_review": mapping_needs_review,
     }
 
@@ -320,7 +413,7 @@ async def _import_ocel(
     ``flavor`` (``json`` / ``xml`` / ``sqlite``) selects the pm4py reader; it's
     content-detected at upload and recovered from meta.json on re-import.
     """
-    result = await asyncio.to_thread(parse_ocel, original_path, flavor=flavor)
+    result = await asyncio.to_thread(_parse_ocel_source, original_path, flavor)
 
     # First gap after the single uninterruptible parse `to_thread` - honour a
     # cancel issued during parsing before normalising/writing the OCEL tables.
@@ -479,9 +572,10 @@ def _to_iso(value: Any) -> str | None:
     if isinstance(value, pd.Timestamp):
         if pd.isna(value):
             return None
-        return value.isoformat()
+        # Normalized to naive UTC at parse - keep the offset in the JSON form.
+        return utc_isoformat(value)
     if isinstance(value, datetime):
-        return value.isoformat()
+        return utc_isoformat(value)
     return str(value)
 
 

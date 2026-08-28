@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
+
+from mate.api.schemas.common import UtcDateTime
 
 
 class UserBrief(BaseModel):
@@ -21,7 +22,7 @@ class TeamOut(BaseModel):
     id: str
     name: str
     member_count: int = 0
-    created_at: datetime
+    created_at: UtcDateTime
 
 
 class TeamCreate(BaseModel):
@@ -52,7 +53,7 @@ class TeamMemberOut(BaseModel):
     email: str | None = None
     preferred_username: str | None = None
     name: str | None = None
-    created_at: datetime
+    created_at: UtcDateTime
 
 
 class MemberAdd(BaseModel):
@@ -82,7 +83,7 @@ class DashboardShareOut(BaseModel):
     kind: Literal["user", "team"]
     target_id: str
     label: str
-    created_at: datetime
+    created_at: UtcDateTime
 
 
 class ShareTarget(BaseModel):
@@ -104,7 +105,7 @@ class SharedDashboard(BaseModel):
     log_model: str = "case_centric"
     card_count: int = 0
     owner_label: str
-    updated_at: datetime
+    updated_at: UtcDateTime
 
 
 # --- Admin oversight ---
@@ -117,4 +118,4 @@ class AdminShareOut(BaseModel):
     owner_label: str
     target_kind: Literal["user", "team"]
     target_label: str
-    created_at: datetime
+    created_at: UtcDateTime

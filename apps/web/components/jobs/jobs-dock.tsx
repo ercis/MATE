@@ -20,7 +20,9 @@ export function JobsDock() {
   const active = useJobsStore(useShallow(selectActiveJobs));
   const counts = useJobsStore(useShallow(selectCounts));
   const setOpen = useJobsStore((s) => s.setDrawerOpen);
-  const collapsed = useUi((s) => s.sidebarCollapsed);
+  // Follow the sidebar's persistent layout footprint, not its hover-peek:
+  // auto mode keeps a w-14 rail (peek overlays content), pinned takes w-56.
+  const collapsed = !useUi((s) => s.sidebarPinned);
   const [hover, setHover] = useState(false);
   const cancel = useCancelJob();
 
@@ -88,7 +90,7 @@ function Pill({
     <button
       type="button"
       onClick={onClick}
-      className="flex max-w-md cursor-pointer items-center gap-3 rounded-full border border-border bg-card px-4 py-2 text-sm shadow-sm transition-shadow hover:shadow-md"
+      className="flex max-w-md cursor-pointer items-center gap-3 rounded-full border border-white/10 [border-top-color:var(--glass-refraction-top)] bg-card/80 px-4 py-2 text-sm shadow-lg backdrop-blur-xl backdrop-saturate-150 transition-shadow hover:shadow-xl supports-[backdrop-filter]:bg-card/70"
       aria-label="Open jobs drawer"
     >
       <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
@@ -126,7 +128,7 @@ function ExpandedStack({
       onKeyDown={(e) => {
         if (e.key === "Enter") onClick();
       }}
-      className="flex w-[360px] cursor-pointer flex-col gap-2 rounded-xl border border-border bg-card p-2 shadow-md"
+      className="flex w-[360px] cursor-pointer flex-col gap-2 rounded-xl border border-white/10 [border-top-color:var(--glass-refraction-top)] bg-card/80 p-2 shadow-xl backdrop-blur-xl backdrop-saturate-150 supports-[backdrop-filter]:bg-card/70"
       aria-label="Open jobs drawer"
     >
       {jobs.map((j) => {

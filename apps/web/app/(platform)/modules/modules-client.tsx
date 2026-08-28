@@ -5,18 +5,14 @@ import { useMemo } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
-import { Skeleton } from "@/components/ui/skeleton";
-import {
-  PageContainer,
-  PageHeader,
-  PageTitle,
-  PageDescription,
-} from "@/components/page";
+import { TableSkeleton } from "@/components/skeletons";
+import { PageContainer, PageHeader } from "@/components/page";
 import { EmptyState } from "@/components/empty-state";
-import { FileBox, Plus, RotateCcw } from "lucide-react";
+import { FileBox, Lock, Plus, RotateCcw } from "lucide-react";
 import { toastError } from "@/lib/toast";
 import {
   useModules,
@@ -37,11 +33,11 @@ const CATEGORY_ORDER = [
 ];
 
 const CATEGORY_LABELS: Record<string, string> = {
-  foundation: "Foundation",
-  attribute: "Attribute",
-  external_input: "External input",
-  advanced: "Advanced",
-  comparison: "Comparison",
+  foundation: "Process Discovery",
+  attribute: "Attribute Analysis",
+  external_input: "External Data",
+  advanced: "Process Intelligence",
+  comparison: "Process Comparison",
   other: "Other",
 };
 
@@ -107,7 +103,7 @@ function ModuleActions() {
   );
 }
 
-function ModuleCard({ m }: { m: ModuleSummary }) {
+function ModuleRow({ m }: { m: ModuleSummary }) {
   // The PUT replaces the stored config wholesale, so we must read the saved
   // config first and hand it back unchanged when flipping `enabled` – toggling
   // with an empty config would wipe the module's settings. The switch stays
@@ -115,6 +111,8 @@ function ModuleCard({ m }: { m: ModuleSummary }) {
   const { data: cfg } = useModuleConfig(m.id);
   const update = useUpdateModuleConfig();
   const enabled = cfg?.enabled ?? m.enabled;
+  // Admin locked this module's config platform-wide: badge it and freeze the toggle.
+  const controlled = cfg?.controlled_by_admin ?? false;
 
   const onToggle = async (val: boolean) => {
     if (!cfg) return;
@@ -127,34 +125,36 @@ function ModuleCard({ m }: { m: ModuleSummary }) {
   };
 
   return (
-    <Card className="gap-0 py-0">
-      <CardContent className="space-y-3 p-4">
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <h3 className="truncate text-sm font-semibold">{m.name}</h3>
-              <span className="text-xs text-muted-foreground">{m.version}</span>
-            </div>
-            {m.author && (
-              <p className="mt-0.5 truncate text-xs text-muted-foreground">by {m.author}</p>
-            )}
-          </div>
-          <Switch
-            checked={enabled}
-            onCheckedChange={onToggle}
-            disabled={cfg === undefined || update.isPending}
-            aria-label={enabled ? `Disable ${m.name}` : `Enable ${m.name}`}
-            className="cursor-pointer shrink-0"
-          />
+    <div className="flex items-center gap-4 px-4 py-3">
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="truncate text-sm font-semibold">{m.name}</h3>
+          <span className="text-xs text-muted-foreground">{m.version}</span>
+          {controlled && (
+            <Badge
+              variant="outline"
+              className="h-5 gap-1 border-destructive/30 bg-destructive/10 px-1.5 py-0 text-[10px] text-destructive"
+            >
+              <Lock className="h-3 w-3" />
+              Admin-controlled
+            </Badge>
+          )}
         </div>
         {m.description && (
-          <p className="line-clamp-2 text-xs text-muted-foreground">{m.description}</p>
+          <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{m.description}</p>
         )}
-        <Button asChild variant="outline" size="sm" className="cursor-pointer w-full">
-          <Link href={`/modules/${m.id}`}>Configure</Link>
-        </Button>
-      </CardContent>
-    </Card>
+      </div>
+      <Button asChild variant="outline" size="sm" className="shrink-0 cursor-pointer">
+        <Link href={`/modules/${m.id}`}>Configure</Link>
+      </Button>
+      <Switch
+        checked={enabled}
+        onCheckedChange={onToggle}
+        disabled={cfg === undefined || update.isPending || controlled}
+        aria-label={enabled ? `Disable ${m.name}` : `Enable ${m.name}`}
+        className={controlled ? "cursor-pointer shrink-0 opacity-60" : "cursor-pointer shrink-0"}
+      />
+    </div>
   );
 }
 
@@ -164,22 +164,12 @@ export function ModulesClient() {
 
   return (
     <PageContainer>
-      <PageHeader>
-        <div className="space-y-1">
-          <PageTitle>Modules</PageTitle>
-          <PageDescription>
-            Enable or disable modules, or open one to configure it.
-          </PageDescription>
-        </div>
+      <PageHeader className="justify-end">
         <ModuleActions />
       </PageHeader>
 
       {isLoading ? (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <Skeleton key={i} className="h-32" />
-          ))}
-        </div>
+        <TableSkeleton rows={9} />
       ) : !modules || modules.length === 0 ? (
         <EmptyState
           icon={FileBox}
@@ -194,11 +184,13 @@ export function ModulesClient() {
                 <h2 className="text-sm font-semibold tracking-tight">{categoryLabel(cat)}</h2>
                 <span className="text-xs text-muted-foreground">{mods.length}</span>
               </div>
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {mods.map((m) => (
-                  <ModuleCard key={m.id} m={m} />
-                ))}
-              </div>
+              <Card className="gap-0 py-0">
+                <CardContent className="divide-y divide-border p-0">
+                  {mods.map((m) => (
+                    <ModuleRow key={m.id} m={m} />
+                  ))}
+                </CardContent>
+              </Card>
             </section>
           ))}
         </div>

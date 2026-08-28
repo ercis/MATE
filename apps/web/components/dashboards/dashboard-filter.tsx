@@ -12,6 +12,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { clearAmbientHeaders, setAmbientHeaders } from "@/lib/api";
+import { EVENT_FILTER_HEADER, encodeFilterHeader } from "@/components/dashboards/widget-filter";
 import type { FilterEntry } from "@/lib/api-types";
 
 /**
@@ -25,15 +26,15 @@ import type { FilterEntry } from "@/lib/api-types";
  * `lib/api.ts`); the backend's module-route dispatch decodes it and *replaces*
  * the committed filter for that request (see the dashboards plan + loader.py).
  *
- * To make every widget re-render with a skeleton and refetch when the filter
- * changes – without touching any widget's own fetch code – widget queries run
- * inside a *dedicated* `QueryClient` (`<DashboardWidgetScope>`). On commit we
- * update the header, then `resetQueries()` on that client: each widget drops
- * to its loading state and refetches, now carrying the new header. The blast
- * radius is the dashboard only; the rest of the app's query cache is untouched.
+ * To make every widget refetch when the filter changes – without touching any
+ * widget's own fetch code – widget queries run inside a *dedicated*
+ * `QueryClient` (`<DashboardWidgetScope>`). On commit we update the header,
+ * then `invalidateQueries({ refetchType: "active" })` on that client: each
+ * mounted widget refetches with the new header while KEEPING its previous
+ * data, so the card holds its last render (dimmed) instead of blanking to a
+ * skeleton. The blast radius is the dashboard only; the rest of the app's
+ * query cache is untouched.
  */
-
-const EVENT_FILTER_HEADER = "X-FF-Event-Filter";
 
 interface DashboardFilterContextValue {
   /** Global column filters (the top bar). */
@@ -44,6 +45,10 @@ interface DashboardFilterContextValue {
   setTimeFilters: (next: FilterEntry[]) => void;
   /** The dedicated client widget queries live in. */
   widgetQueryClient: QueryClient;
+  /** True while a filter commit is refetching. Cards dim rather than blanking
+   * to skeletons, so the board never throws away what it was showing before it
+   * has anything to replace it with. */
+  isRefetching: boolean;
 }
 
 const DashboardFilterContext = createContext<DashboardFilterContextValue | null>(null);
@@ -56,26 +61,38 @@ export function useDashboardFilter(): DashboardFilterContextValue {
   return ctx;
 }
 
-/** UTF-8-safe base64 – `btoa` alone breaks on non-Latin1 filter values. */
-function encodeFilterHeader(entries: FilterEntry[]): string {
-  const json = JSON.stringify({ filter: entries });
-  const bytes = new TextEncoder().encode(json);
-  let binary = "";
-  for (const b of bytes) binary += String.fromCharCode(b);
-  return btoa(binary);
+/** Non-throwing variant for code that may run outside a dashboard (e.g. the
+ * shared dataset-fetch hook). Returns `null` when no provider is mounted. */
+export function useDashboardFilterOptional(): DashboardFilterContextValue | null {
+  return useContext(DashboardFilterContext);
 }
 
 export function DashboardFilterProvider({
   children,
   initialColumnFilters = [],
+  initialTimeFilters = [],
+  onCommit,
 }: {
   children: ReactNode;
-  /** Column filters to load with – the board's active saved filter, if any.
-   * Read once on mount; later preset switches flow through `setColumnFilters`. */
+  /** Column filters to load with – the board's committed live bar (or its active
+   * saved filter). Read once on mount; later changes flow through `setColumnFilters`. */
   initialColumnFilters?: FilterEntry[];
+  /** Time-range window to load with – the board's committed window (a shared
+   * board seeds this from the owner). Read once on mount. */
+  initialTimeFilters?: FilterEntry[];
+  /** Fires (debounced, never on the initial mount) whenever the committed filter
+   * view changes, so the owner can persist it on the board. Omitted for a
+   * read-only recipient – their tweaks stay ephemeral. */
+  onCommit?: (next: { columnFilters: FilterEntry[]; timeFilters: FilterEntry[] }) => void;
 }) {
   const [columnFilters, setColumnFilters] = useState<FilterEntry[]>(initialColumnFilters);
-  const [timeFilters, setTimeFilters] = useState<FilterEntry[]>([]);
+  const [timeFilters, setTimeFilters] = useState<FilterEntry[]>(initialTimeFilters);
+  // Drives the cards' dimmed hold-state while a filter commit refetches.
+  const [isRefetching, setRefetching] = useState(false);
+  // Ref so the debounced commit effect can call the latest handler without
+  // re-arming the timer on every parent render.
+  const onCommitRef = useRef(onCommit);
+  onCommitRef.current = onCommit;
   // One client per provider instance – widget queries are isolated here.
   const [widgetQueryClient] = useState(
     () =>
@@ -106,27 +123,43 @@ export function DashboardFilterProvider({
     // both churn `combined` rapidly. Without this, every keystroke/tick resets
     // and refetches *every* widget at once - a thundering herd of backend
     // recomputes. Coalescing into one update per ~300ms idle means a 20-card
-    // board recomputes once. resetQueries (not removeQueries): it returns each
-    // widget query to pending (so the card skeletons) AND refetches the active
-    // ones with the new header; removeQueries would leave mounted widgets
-    // showing stale results without refetching.
+    // board recomputes once.
     if (commitTimer.current) clearTimeout(commitTimer.current);
     commitTimer.current = setTimeout(() => {
       setAmbientHeaders({ [EVENT_FILTER_HEADER]: header });
-      void widgetQueryClient.resetQueries();
+      // Let the owner persist the committed view on the board (so it transfers
+      // to share recipients). No-op for a read-only recipient (no handler).
+      onCommitRef.current?.({ columnFilters, timeFilters });
+      // `invalidateQueries`, NOT `resetQueries`. Reset returns every widget
+      // query to `pending`, so the whole board blanked to skeletons at once on
+      // each filter change — the screen threw away what it was showing before
+      // it had anything to replace it with. Invalidate refetches the active
+      // ones while keeping the previous `data`, so cards hold their last
+      // render (dimmed, via `isRefetching` below) and swap in place.
+      setRefetching(true);
+      void widgetQueryClient
+        .invalidateQueries({ refetchType: "active" })
+        .finally(() => setRefetching(false));
     }, 300);
     return () => {
       if (commitTimer.current) clearTimeout(commitTimer.current);
     };
-  }, [combined, widgetQueryClient]);
+  }, [combined, columnFilters, timeFilters, widgetQueryClient]);
 
   // Tidy up when the dashboard unmounts so the header can't leak onto other
   // pages' requests.
   useEffect(() => () => clearAmbientHeaders(EVENT_FILTER_HEADER), []);
 
   const value = useMemo<DashboardFilterContextValue>(
-    () => ({ columnFilters, setColumnFilters, timeFilters, setTimeFilters, widgetQueryClient }),
-    [columnFilters, timeFilters, widgetQueryClient],
+    () => ({
+      columnFilters,
+      setColumnFilters,
+      timeFilters,
+      setTimeFilters,
+      widgetQueryClient,
+      isRefetching,
+    }),
+    [columnFilters, timeFilters, widgetQueryClient, isRefetching],
   );
 
   return (

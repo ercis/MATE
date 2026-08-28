@@ -7,10 +7,8 @@ Note: Adapted for the purposes of this work.
 
 import numpy as np
 import ruptures as rpt
-
+from scipy.cluster.hierarchy import fcluster, linkage
 from sklearn.metrics import mean_squared_error
-from scipy.cluster.hierarchy import linkage
-from scipy.cluster.hierarchy import fcluster
 
 
 # method used in the main processing method for cleaning data
@@ -107,7 +105,7 @@ def do_cluster_changePoint(data_uncut,
     count = 0
     clusters_with_declare_names = {}
 
-    order_cluster = [(i, len(d[i])) for i in d.keys()]
+    order_cluster = [(i, len(d[i])) for i in d]
     order_cluster = sorted(order_cluster, key=lambda x: -x[1])
     order_cluster = [key for key, _ in order_cluster]
 

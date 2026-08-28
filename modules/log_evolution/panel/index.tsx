@@ -37,14 +37,6 @@ export default function LogEvolutionPanel({ logId }: { logId: string; moduleId: 
 
   return (
     <div className="space-y-6">
-      <header className="space-y-1">
-        <h2 className="text-lg font-semibold">Log evolution</h2>
-        <p className="text-xs text-muted-foreground">
-          How the event log develops over time – arrivals vs. completions, work in progress,
-          the activity mix, and a dotted chart of every event.
-        </p>
-      </header>
-
       <Card>
         <CardContent className="flex flex-wrap items-end gap-4">
           <Field label="Granularity">

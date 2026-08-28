@@ -12,6 +12,7 @@ import {
   Search,
   ShieldAlert,
   XCircle,
+  Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -387,6 +388,9 @@ export default function AdminJobsPage() {
                     onCancel={(id) =>
                       void runAction(`/api/v1/admin/jobs/${id}/cancel`, null, "Job cancelled")
                     }
+                    onKill={(id) =>
+                      void runAction(`/api/v1/admin/jobs/${id}/kill`, null, "Job killed")
+                    }
                     onRetry={(id) =>
                       void runAction(`/api/v1/admin/jobs/${id}/retry`, null, "Job re-queued")
                     }
@@ -494,12 +498,14 @@ function JobsTable({
   hideOwner,
   hideLog,
   onCancel,
+  onKill,
   onRetry,
 }: {
   rows: AdminJobRow[];
   hideOwner: boolean;
   hideLog: boolean;
   onCancel: (id: string) => void;
+  onKill: (id: string) => void;
   onRetry: (id: string) => void;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -602,6 +608,25 @@ function JobsTable({
                         onClick={() => onCancel(r.id)}
                       >
                         <XCircle /> Cancel
+                      </Button>
+                    ) : null}
+                    {r.status === "running" ? (
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        className="text-destructive hover:text-destructive"
+                        title="Force-kill: SIGKILL the job's whole process tree now, skipping the cooperative grace window."
+                        onClick={() => {
+                          if (
+                            !window.confirm(
+                              "Force-kill this job? It SIGKILLs the whole process tree immediately — use it for a job that won't respond to Cancel.",
+                            )
+                          )
+                            return;
+                          onKill(r.id);
+                        }}
+                      >
+                        <Zap /> Kill
                       </Button>
                     ) : null}
                     {r.status === "failed" ? (

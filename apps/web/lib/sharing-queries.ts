@@ -104,6 +104,16 @@ export function useShareTargets(enabled = true) {
   });
 }
 
+/** True once we know the user has nobody to share with (not in any team –
+ * `/sharing/targets` returns `[]` exactly then). Drives the disabled state of
+ * Share buttons: they stay visible but grayed with a "join a team" tooltip.
+ * While loading (or on error) this is false, so the button stays usable and
+ * the dialog's own empty-state acts as the fallback explanation. */
+export function useNoShareTargets(enabled = true): boolean {
+  const targets = useShareTargets(enabled);
+  return targets.isSuccess && targets.data.length === 0;
+}
+
 export function useDashboardShares(dashboardId: string | null) {
   return useQuery({
     queryKey: dashboardId ? sharingKeys.dashboardShares(dashboardId) : ["sharing", "noop"],

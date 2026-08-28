@@ -1,16 +1,13 @@
 "use client";
 
-import { Info, Layers } from "lucide-react";
-
-import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 
+import { MetricInfoHint } from "./metric-info";
 import {
   formatMetric,
   useComplexityV2,
   useTransitionMatrix,
-  type ComplexityV2Payload,
   type MetricGroup,
   type TransitionMatrix,
 } from "./queries";
@@ -48,7 +45,6 @@ export default function ComplexityV2Panel({
 
   return (
     <div className="space-y-6">
-      <Header data={data} />
       <div className="grid gap-4 xl:grid-cols-2">
         {data.groups.map((group) => (
           <MetricTable
@@ -64,49 +60,6 @@ export default function ComplexityV2Panel({
   );
 }
 
-// ── Header ────────────────────────────────────────────────────────────────────
-
-function Header({ data }: { data: ComplexityV2Payload }) {
-  return (
-    <header className="flex flex-wrap items-end justify-between gap-3">
-      <div className="space-y-1">
-        <h2 className="flex items-center gap-2 text-lg font-semibold">
-          <Layers className="h-5 w-5 text-muted-foreground" />
-          Complexity v2
-        </h2>
-        <p className="max-w-2xl text-xs text-muted-foreground">
-          The full event-log complexity suite (Table 3.3) from Langer&rsquo;s thesis
-          <span className="italic"> Understanding Business Process Complexity</span> –
-          entropy, size, variation and distance measures.
-        </p>
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge variant="outline" className="tabular-nums">
-          {fmtInt(data.n_events)} events
-        </Badge>
-        <Badge variant="outline" className="tabular-nums">
-          {fmtInt(data.n_cases)} traces
-        </Badge>
-        <Badge variant="outline" className="tabular-nums">
-          {fmtInt(data.n_variants)} variants
-        </Badge>
-        {data.enriched_supported ? (
-          <Badge variant="secondary" className="gap-1.5">
-            <Info className="h-3 w-3" />
-            Enriched attributes detected
-          </Badge>
-        ) : null}
-        {data.downsampled ? (
-          <Badge variant="outline" className="gap-1.5 text-amber-600 dark:text-amber-500">
-            <Info className="h-3 w-3" />
-            Distance metrics use top {fmtInt(data.distance_variants_used)} variants
-          </Badge>
-        ) : null}
-      </div>
-    </header>
-  );
-}
-
 // ── Per-category metric table ─────────────────────────────────────────────────
 
 function MetricTable({
@@ -119,14 +72,23 @@ function MetricTable({
   enrichedSupported: boolean;
 }) {
   const enrichedUnavailable = group.category === "Enriched Entropy" && !enrichedSupported;
+  const uniformSource =
+    group.items.length > 0 && group.items.every((i) => i.source === group.items[0].source)
+      ? group.items[0].source
+      : null;
 
   return (
     <Card>
       <CardContent>
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-sm font-semibold">{group.category}</h3>
+        <div className="mb-3 flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold">{group.category}</h3>
+            {uniformSource ? (
+              <div className="text-[11px] text-muted-foreground">{uniformSource}</div>
+            ) : null}
+          </div>
           {enrichedUnavailable ? (
-            <span className="text-[11px] text-muted-foreground">
+            <span className="shrink-0 text-[11px] text-muted-foreground">
               XES standard attributes missing
             </span>
           ) : null}
@@ -149,8 +111,11 @@ function MetricTable({
                         {item.label}
                       </code>
                       <span>{item.name}</span>
+                      <MetricInfoHint metricKey={item.key} />
                     </div>
-                    <div className="text-[11px] text-muted-foreground">{item.source}</div>
+                    {uniformSource ? null : (
+                      <div className="text-[11px] text-muted-foreground">{item.source}</div>
+                    )}
                   </td>
                   <td className="py-1.5 pr-3 tabular-nums">
                     {formatMetric(item.key, item.value, values)}
@@ -180,6 +145,7 @@ function TransitionHeatmap({ logId }: { logId: string }) {
         <div className="mb-1 flex items-center gap-2">
           <h3 className="text-sm font-semibold">Probability of action pairs</h3>
           <code className="rounded bg-muted px-1.5 py-0.5 text-[11px]">prob-act-pairs</code>
+          <MetricInfoHint metricKey="prob_act_pairs" />
         </div>
         <p className="mb-3 text-xs text-muted-foreground">
           Row-stochastic directly-follows transition matrix (Grisold et al., 2022).
@@ -208,11 +174,28 @@ function HeatmapGrid({ matrix }: { matrix: TransitionMatrix }) {
         className="grid gap-px text-[10px]"
         style={{ gridTemplateColumns: `minmax(80px, 140px) repeat(${n}, 16px)` }}
       >
-        {/* Header row: empty corner + column indices */}
+        {/* Header row: empty corner + activity names rotated to fit the 16px columns */}
         <div />
-        {activities.map((_, j) => (
-          <div key={`h${j}`} className="text-center text-muted-foreground tabular-nums">
-            {j + 1}
+        {activities.map((act, j) => (
+          <div
+            key={`h${j}`}
+            className="flex items-end justify-center overflow-hidden text-muted-foreground"
+            style={{ height: 140 }}
+            title={act}
+          >
+            <span
+              className="whitespace-nowrap"
+              style={{
+                writingMode: "vertical-rl",
+                transform: "rotate(180deg)",
+                maxHeight: 136,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                lineHeight: "16px",
+              }}
+            >
+              {act}
+            </span>
           </div>
         ))}
         {/* Body */}
@@ -220,14 +203,6 @@ function HeatmapGrid({ matrix }: { matrix: TransitionMatrix }) {
           <Row key={`r${i}`} index={i} label={act} row={m[i]} />
         ))}
       </div>
-      <ol className="mt-3 grid grid-cols-1 gap-x-6 gap-y-0.5 text-[11px] text-muted-foreground sm:grid-cols-2 lg:grid-cols-3">
-        {activities.map((act, i) => (
-          <li key={`l${i}`} className="truncate tabular-nums">
-            <span className="mr-1 font-medium">{i + 1}.</span>
-            {act}
-          </li>
-        ))}
-      </ol>
     </div>
   );
 }
@@ -258,8 +233,4 @@ function cellColor(p: number): string {
   // Indigo, opacity scaled by probability (eased so small values stay visible).
   const alpha = 0.12 + 0.88 * Math.sqrt(Math.min(1, p));
   return `rgba(79,70,229,${alpha.toFixed(3)})`;
-}
-
-function fmtInt(n: number | null): string {
-  return n === null || n === undefined ? "–" : Math.round(n).toLocaleString();
 }

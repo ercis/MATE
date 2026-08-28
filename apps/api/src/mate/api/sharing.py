@@ -107,7 +107,7 @@ async def user_can_read_log(session: AsyncSession, log_id: str, user_id: str) ->
     revoking access is automatic.
     """
     team_ids = await user_team_ids(session, user_id)
-    stmt = (
+    dash_stmt = (
         select(DashboardShare.id)
         .join(Dashboard, Dashboard.id == DashboardShare.dashboard_id)
         .where(
@@ -116,4 +116,4 @@ async def user_can_read_log(session: AsyncSession, log_id: str, user_id: str) ->
         )
         .limit(1)
     )
-    return (await session.execute(stmt)).first() is not None
+    return (await session.execute(dash_stmt)).first() is not None

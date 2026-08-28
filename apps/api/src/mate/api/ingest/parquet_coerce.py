@@ -41,17 +41,42 @@ def coerce_object_columns(df: Any, string_only: set[str]) -> list[str]:
     return fixed_columns
 
 
+def to_datetime_robust(values: Any, *, format: str | None = None, utc: bool = False) -> Any:
+    """``to_datetime`` that survives mixed-precision/mixed-format columns.
+
+    Bare ``to_datetime`` (pandas >=2) locks onto the format of the first
+    non-null value, silently NaT-coercing every row with a different shape
+    (e.g. whole-second vs fractional-second ISO stamps). Try the fast
+    single-format path first; if any non-null input failed to parse, retry
+    per-element (``format="mixed"``) and keep whichever parsed more.
+    """
+    import pandas as pd
+
+    if format:
+        return pd.to_datetime(values, format=format, errors="coerce", utc=utc)
+    parsed = pd.to_datetime(values, errors="coerce", utc=utc)
+    src = values if isinstance(values, pd.Series) else pd.Series(values)
+    failed = parsed.isna() & src.notna().to_numpy()
+    if failed.any():
+        try:
+            retry = pd.to_datetime(values, format="mixed", errors="coerce", utc=utc)
+        except (ValueError, TypeError):
+            # e.g. mixed offsets with utc=False — keep the fast-path result.
+            return parsed
+        if retry.notna().sum() > parsed.notna().sum():
+            return retry
+    return parsed
+
+
 def normalize_timestamps(df: Any, column: str) -> Any:
     """Coerce ``df[column]`` to a tz-naive UTC datetime column, dropping rows
     that fail to parse. ``utc=True`` collapses mixed offsets to a single dtype;
     the tz is then dropped to keep the parquet / SQLite DateTime column shape.
     """
-    import pandas as pd
-
-    df[column] = pd.to_datetime(df[column], errors="coerce", utc=True)
+    df[column] = to_datetime_robust(df[column], utc=True)
     df = df.dropna(subset=[column])
     df[column] = df[column].dt.tz_localize(None)
     return df
 
 
-__all__ = ["coerce_object_columns", "normalize_timestamps"]
+__all__ = ["coerce_object_columns", "normalize_timestamps", "to_datetime_robust"]

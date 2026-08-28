@@ -1,4 +1,4 @@
-"""Server-side usage tracking for a curated set of business operations.
+"""Server-side usage tracking for every authenticated API request.
 
 Implemented as a *pure ASGI* middleware rather than Starlette's
 ``BaseHTTPMiddleware`` on purpose: BaseHTTPMiddleware buffers the response body,
@@ -7,10 +7,15 @@ The pure-ASGI form is transparent to streaming and, because ``await self.app(...
 only returns once the whole response (including a streamed body) has been sent,
 the measured duration covers the *entire* operation - e.g. a full AI completion.
 
-We only record a curated allowlist of meaningful, synchronous operations.
-Long-running work (imports, module runs, installs) goes through the job runtime
-and is captured separately as ``job`` events with their real runtime duration -
-see ``main._job_event_recorder_loop``.
+Every authenticated request becomes one ``operation`` event named after the
+route template (``/api/v1/event-logs/{log_id}``), so the backend side of the
+UI log is complete - the paper's "computer-initiated"/server perspective. A
+small curated list keeps friendlier names for headline business ops. Noise
+sources (the ingest endpoint itself, SSE streams, the 10s-polling admin
+insights, docs/health) are excluded. Nothing touches the DB on the request
+path: drafts go to ``services.usage_recorder``'s batched background writer,
+which also checks consent per user. Long-running work still arrives via the
+job runtime as ``job`` events - see ``main._job_event_recorder_loop``.
 """
 
 from __future__ import annotations
@@ -21,14 +26,13 @@ from typing import Any
 
 import structlog
 
-from mate.api.db.engine import get_sessionmaker
-from mate.api.routes.analytics import record_server_event
+from mate.api.services.usage_recorder import ServerEventDraft, enqueue_server_event
 
 log = structlog.get_logger(__name__)
 
-# (HTTP method, path regex, operation name). Matched against the raw request
-# path (no query string). Keep this list to genuinely meaningful actions -
-# every match is one row kept for the user's full retention window.
+# (HTTP method, path regex, operation name). Friendly-name overrides for
+# headline business operations; everything else falls back to the route
+# template as the event name.
 _BUSINESS_OPS: list[tuple[str, re.Pattern[str], str]] = [
     ("POST", re.compile(r"^/api/v1/ai/chat$"), "ai_chat"),
     ("POST", re.compile(r"^/api/v1/ai/guidance/"), "ai_guidance"),
@@ -39,12 +43,37 @@ _BUSINESS_OPS: list[tuple[str, re.Pattern[str], str]] = [
     ("DELETE", re.compile(r"^/api/v1/ai/guidance/module/[^/]+$"), "ai_guidance_cleared"),
 ]
 
+# Paths that would only add noise (or feedback loops): the tracking pipeline
+# itself, SSE streams, fast-polling reads, and infra endpoints.
+_EXCLUDED_PREFIXES = (
+    "/api/v1/usage",
+    "/api/v1/events",
+    "/api/v1/admin/insights",
+    "/api/v1/system/metrics",
+    "/health",
+    "/docs",
+    "/redoc",
+    "/openapi.json",
+    "/metrics",
+)
+
+_EXCLUDED_METHODS = frozenset({"OPTIONS", "HEAD"})
+
 
 def _match_op(method: str, path: str) -> str | None:
     for m, rx, name in _BUSINESS_OPS:
         if m == method and rx.match(path):
             return name
     return None
+
+
+def _excluded(method: str, path: str) -> bool:
+    if method in _EXCLUDED_METHODS:
+        return True
+    if path.startswith(_EXCLUDED_PREFIXES):
+        return True
+    # Per-job SSE streams: /api/v1/jobs/{id}/stream.
+    return path.startswith("/api/v1/jobs/") and path.endswith("/stream")
 
 
 class UsageTrackingMiddleware:
@@ -56,8 +85,9 @@ class UsageTrackingMiddleware:
             await self.app(scope, receive, send)
             return
 
-        op = _match_op(scope.get("method", ""), scope.get("path", ""))
-        if op is None:
+        method = scope.get("method", "")
+        path = scope.get("path", "")
+        if _excluded(method, path):
             await self.app(scope, receive, send)
             return
 
@@ -77,23 +107,40 @@ class UsageTrackingMiddleware:
             state = scope.get("state") or {}
             user_id = state.get("user_id")
             if user_id:
-                await self._record(scope, op, user_id, status_code["code"], duration_ms)
+                try:
+                    self._enqueue(scope, method, path, user_id, status_code["code"], duration_ms)
+                except Exception:
+                    # Tracking must never surface to / break the response.
+                    log.warning("usage_middleware.record_failed", path=path, exc_info=True)
 
-    async def _record(
-        self, scope: Any, op: str, user_id: str, status: int | None, duration_ms: int
+    def _enqueue(
+        self,
+        scope: Any,
+        method: str,
+        path: str,
+        user_id: str,
+        status: int | None,
+        duration_ms: int,
     ) -> None:
-        try:
-            sm = get_sessionmaker()
-            async with sm() as session:
-                await record_server_event(
-                    session,
-                    user_id=user_id,
-                    event_name=op,
-                    event_type="operation",
-                    path=scope.get("path"),
-                    duration_ms=duration_ms,
-                    properties={"method": scope.get("method"), "status": status},
-                )
-        except Exception:
-            # Tracking must never surface to / break the response it describes.
-            log.warning("usage_middleware.record_failed", op=op, exc_info=True)
+        # After routing, FastAPI leaves the matched route on the scope - its
+        # template (`/api/v1/event-logs/{log_id}`) is the stable activity name
+        # and its params carry the resource ids for the OCEL object layer.
+        route = scope.get("route")
+        template = getattr(route, "path_format", None) or path
+        op = _match_op(method, path)
+        path_params = {
+            k: str(v) for k, v in (scope.get("path_params") or {}).items() if v is not None
+        }
+        properties: dict[str, Any] = {"method": method, "status": status, "route": template}
+        if path_params:
+            properties["path_params"] = path_params
+        enqueue_server_event(
+            ServerEventDraft(
+                user_id=user_id,
+                event_type="operation",
+                event_name=op or f"{method} {template}",
+                path=path,
+                duration_ms=duration_ms,
+                properties=properties,
+            )
+        )

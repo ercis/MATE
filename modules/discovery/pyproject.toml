@@ -1,0 +1,14 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ff-mod-discovery"
+version = "1.0.0"
+requires-python = "==3.12.*"
+dependencies = [
+    "ortools>=9.11,<10",
+]
+
+[tool.hatch.build.targets.wheel]
+bypass-selection = true

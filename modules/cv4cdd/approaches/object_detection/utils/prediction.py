@@ -1,20 +1,17 @@
-import os
+import datetime as dt
 import json
-import tensorflow as tf
+import os
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import datetime as dt
-import matplotlib.pyplot as plt
-
+import tensorflow as tf
+import utils.config as cfg
 import utils.preprocessing as pp
 import utils.utilities as utils
-import utils.vdd_helper as vdd_helper
 import utils.vdd_data_analysis as vdd
-import utils.config as cfg
-
+import utils.vdd_helper as vdd_helper
 from tqdm import tqdm
-from typing import List, Union
-
 
 # ---------------------------------------------------------------------------
 # Data-loading helpers (formerly in utils/evaluation.py)
@@ -43,21 +40,21 @@ def get_log_matching(data_dir: str) -> pd.DataFrame:
     return log_matching
 
 
-def get_window_info(data_dir: str) -> Union[list, dict]:
+def get_window_info(data_dir: str) -> list | dict:
     """Load window info from file."""
     window_info_path = os.path.join(data_dir, "window_info.json")
     assert os.path.isfile(window_info_path), "No window info file found"
     return json.load(open_file(window_info_path))
 
 
-def get_date_info(data_dir: str) -> Union[list, dict]:
+def get_date_info(data_dir: str) -> list | dict:
     """Load date info from file."""
     date_info_path = os.path.join(data_dir, "date_info.json")
     assert os.path.isfile(date_info_path), "No date info file found"
     return json.load(open_file(date_info_path))
 
 
-def get_first_timestamps_vdd(data_dir: str) -> Union[list, dict]:
+def get_first_timestamps_vdd(data_dir: str) -> list | dict:
     """Load first timestamps for VDD from file."""
     first_timestamps_path = os.path.join(data_dir, "first_timestamps.json")
     assert os.path.isfile(first_timestamps_path), "No timestamps file found"
@@ -237,7 +234,7 @@ def save_pred_results(results: dict, output_path: str):
 # ---------------------------------------------------------------------------
 
 def get_changepoints_trace_idx_winsim(bboxes: list, y_pred: list,
-                                      window_info: dict) -> List[tuple]:
+                                      window_info: dict) -> list[tuple]:
     """Convert predicted bounding boxes to trace-index changepoints (WINSIM)."""
     change_points = []
     if len(bboxes) == 0:
@@ -260,7 +257,7 @@ def get_changepoints_trace_idx_winsim(bboxes: list, y_pred: list,
 def get_changepoints_trace_idx_vdd(bboxes: list, y_pred: list,
                                    timestamps_per_trace: dict,
                                    min_date: dt.date, max_date: dt.date,
-                                   targetsize: int) -> List[tuple]:
+                                   targetsize: int) -> list[tuple]:
     """Convert predicted bounding boxes to trace-index changepoints (VDD).
 
     The x-axis represents the time period, so the changepoint is derived from

@@ -27,9 +27,16 @@ from pathlib import Path
 
 import pytest
 
+from mate.api.modules.runtimes.base import WorkerLaunchSpec
 from mate.api.modules.subprocess_host import SubprocessBridge, SubprocessHostError
 from mate.api.modules.subprocess_worker import WireConnection
 from mate.sdk.manifest import Manifest
+
+
+def _bridge(tmp_path: Path) -> SubprocessBridge:
+    # The launch spec is never exec'd in these tests (spawn is monkeypatched
+    # or `_proc` is injected directly) - a plain interpreter argv suffices.
+    return SubprocessBridge(_manifest(), tmp_path, WorkerLaunchSpec(argv=(sys.executable,)))
 
 
 def _manifest() -> Manifest:
@@ -89,7 +96,7 @@ async def test_kill_worker_group_kills_grandchildren(tmp_path: Path) -> None:
     """`_kill_worker_group` must take down the worker's whole process group, so
     a simulation that forked helper processes dies with it - not just the
     worker leader."""
-    bridge = SubprocessBridge(_manifest(), tmp_path)
+    bridge = _bridge(tmp_path)
     # Parent (group leader, own session) spawns a child sleeper in the SAME
     # group, prints the child's pid, then blocks. killpg must reap both.
     parent_code = (
@@ -123,7 +130,7 @@ async def test_cancel_active_kills_fails_pending_and_respawns(monkeypatch, tmp_p
     """`cancel_active` must (1) kill the running worker, (2) fail every in-flight
     call so sibling handler tasks don't hang, and (3) respawn a fresh worker so
     the module keeps serving."""
-    bridge = SubprocessBridge(_manifest(), tmp_path)
+    bridge = _bridge(tmp_path)
     spawned: list[asyncio.subprocess.Process] = []
 
     async def fake_spawn() -> None:
@@ -172,7 +179,7 @@ async def test_cancel_active_kills_fails_pending_and_respawns(monkeypatch, tmp_p
 async def test_cancel_active_is_a_noop_during_teardown(monkeypatch, tmp_path: Path) -> None:
     """Once `stop()` has set the teardown flag, a late cancel must not resurrect
     the worker."""
-    bridge = SubprocessBridge(_manifest(), tmp_path)
+    bridge = _bridge(tmp_path)
     bridge._stopping = True
     monkeypatch.setattr(
         bridge,

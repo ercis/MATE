@@ -80,6 +80,36 @@ def test_settled_cascade_skips_whole_chain() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Plan ordering - the jobs UI renders the plan verbatim, so it must read as the
+# execution order, not alphabetically.
+# --------------------------------------------------------------------------- #
+
+
+def _topo(after):
+    from mate.api.modules.processing import ModuleProcessingCoordinator
+
+    return ModuleProcessingCoordinator._topo_order(after)
+
+
+def test_topo_puts_upstream_first_against_alphabetical_order() -> None:
+    # "a" waits on "z": alphabetical would invert the real execution order.
+    assert _topo({"a": ["z"], "z": []}) == ["z", "a"]
+
+
+def test_topo_sorts_alphabetically_within_a_layer() -> None:
+    # Same depth → stable, byte-identical output across imports.
+    assert _topo({"b": [], "a": [], "c": ["a", "b"]}) == ["a", "b", "c"]
+
+
+def test_topo_appends_cycle_members_instead_of_dropping_them() -> None:
+    # A cycle can't be emitted by Kahn; it must still appear in the plan, or the
+    # UI would show a checklist shorter than the set of modules being waited on.
+    out = _topo({"a": ["b"], "b": ["a"], "root": []})
+    assert out[0] == "root"
+    assert sorted(out[1:]) == ["a", "b"]
+
+
+# --------------------------------------------------------------------------- #
 # Coordinator end-to-end with a real chained fixture.
 # --------------------------------------------------------------------------- #
 
@@ -143,6 +173,8 @@ async def test_closure_includes_chained_downstream(tmp_path: Path) -> None:
         by_id = {step["id"]: step["after"] for step in plan}
         assert by_id["precompute_mod"] == []  # a root
         assert by_id["chained_mod"] == ["precompute_mod"]  # waits on the root
+        # Execution order, not alphabetical - "chained_mod" < "precompute_mod".
+        assert [step["id"] for step in plan] == ["precompute_mod", "chained_mod"]
 
 
 @pytest.mark.asyncio

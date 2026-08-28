@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import List
 
 from langchain_core.language_models import BaseChatModel
 from pydantic.v1 import BaseModel, Field
@@ -27,7 +26,7 @@ class _Classification(BaseModel):
 class ClassificationList(BaseModel):
     """A list of all relevant classifications for the given text snippet."""
 
-    classifications: List[_Classification]
+    classifications: list[_Classification]
 
 
 PROMPT_TEMPLATE = """You are an expert business process analyst specializing in process mining. Your task is to classify a given text snippet against the full three-level Franzoi et al. context taxonomy.
@@ -73,7 +72,7 @@ def make_franzoi_mapper_agent(*, llm: BaseChatModel):
 
     def run_franzoi_mapper_agent(state: GraphState) -> dict:
         logging.info("--- Running Franzoi Mapper Agent ---")
-        snippets: List[ContextSnippet] = state.get("reranked_context_snippets", []) or []
+        snippets: list[ContextSnippet] = state.get("reranked_context_snippets", []) or []
         if not snippets:
             return {}
 
@@ -100,7 +99,7 @@ def make_franzoi_mapper_agent(*, llm: BaseChatModel):
                     ]
                     continue
 
-            typed: List[FranzoiClassification] = [
+            typed: list[FranzoiClassification] = [
                 {
                     "full_path": item.get("full_path", "UNKNOWN"),
                     "reasoning": item.get("reasoning", ""),

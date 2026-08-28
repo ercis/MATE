@@ -14,7 +14,6 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useUi } from "@/lib/stores/ui";
 import { StorageGauge } from "@/components/settings/storage-gauge";
-import { WorkerConcurrency } from "@/components/settings/worker-concurrency";
 import { useOnboardingState, useUpdateOnboarding } from "@/lib/onboarding-queries";
 import type { ExperienceLevel } from "@/lib/stores/onboarding";
 
@@ -35,6 +34,8 @@ export default function GeneralSettingsPage() {
   const setCsvDelimiter = useUi((s) => s.setCsvDelimiter);
   const csvTimestampFormat = useUi((s) => s.csvTimestampFormat);
   const setCsvTimestampFormat = useUi((s) => s.setCsvTimestampFormat);
+  const backButtonMode = useUi((s) => s.backButtonMode);
+  const setBackButtonMode = useUi((s) => s.setBackButtonMode);
 
   const onboardingQuery = useOnboardingState();
   const updateOnboarding = useUpdateOnboarding();
@@ -79,14 +80,37 @@ export default function GeneralSettingsPage() {
 
       <Card>
         <CardHeader>
+          <CardTitle className="text-base">Navigation</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <Label className="flex items-center justify-between gap-3">
+            <span className="space-y-0.5">
+              <span className="block text-sm">Back button goes to parent page</span>
+              <span className="block text-xs text-muted-foreground">
+                When on, the topbar back arrow goes up one level in the page
+                hierarchy. When off, it returns to the last page you visited.
+              </span>
+            </span>
+            <Switch
+              checked={backButtonMode === "parent"}
+              onCheckedChange={(v) => setBackButtonMode(v ? "parent" : "history")}
+              className="cursor-pointer"
+            />
+          </Label>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle className="text-base">Notifications</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <Label className="flex items-center justify-between gap-3">
             <span className="space-y-0.5">
-              <span className="block text-sm">Mute non-error toasts</span>
+              <span className="block text-sm">Hide success notifications</span>
               <span className="block text-xs text-muted-foreground">
-                Errors always toast. Successes and queue notices stay quiet.
+                When on, success and info popups are hidden. Error messages are
+                always shown.
               </span>
             </span>
             <Switch checked={muted} onCheckedChange={setMuted} className="cursor-pointer" />
@@ -148,7 +172,7 @@ export default function GeneralSettingsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Locale &amp; imports</CardTitle>
+          <CardTitle className="text-base">Location &amp; imports</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4 text-sm">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -209,28 +233,6 @@ export default function GeneralSettingsPage() {
         </CardHeader>
         <CardContent>
           <StorageGauge />
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Jobs</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="space-y-2">
-            <Label>Worker concurrency</Label>
-            <WorkerConcurrency />
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Telemetry</CardTitle>
-        </CardHeader>
-        <CardContent className="text-sm text-muted-foreground">
-          Off by default. The platform is local-first; data never leaves your
-          machine. Manage what gets captured in <a href="/settings/privacy" className="underline">Settings → Privacy</a>.
         </CardContent>
       </Card>
     </div>

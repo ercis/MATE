@@ -15,13 +15,15 @@ import asyncio
 import hashlib
 import json
 import os
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import HTTPException
 from fastapi.responses import Response
+from pydantic import BaseModel, Field
 
 from mate.sdk import Module, ModuleContext, job, on_event, route
 
+from .layout.model import LAYOUT_VERSION
 from .serializers import (
     serialize_bpmn,
     serialize_dfg,
@@ -78,6 +80,111 @@ def _heuristics_cache_key(thresholds: dict[str, float]) -> str:
         digest_size=4,
     ).hexdigest()
     return f"heuristics_net__{h}"
+
+
+# -- server-side DFG layout ----------------------------------------------------
+#
+# POST /dfg/layout computes coordinates for the CLIENT-FILTERED visible
+# subgraph (the activity/connection sliders live in the panel, so the server
+# never sees the full picture) — see `modules/discovery/layout/` for the
+# algorithms. Hard cap: past this the response would be unusable in the canvas
+# anyway; the IP has its own softer size cap that degrades to heuristic ranks.
+_LAYOUT_MAX_NODES = 400
+# A complete DFG on 400 nodes is 160k edges — `insert_virtual_nodes` would build
+# millions of virtuals long before any of it could be drawn. The node cap alone
+# does not bound that.
+_LAYOUT_MAX_EDGES = 4000
+# Variant sequences handed to the layout (backbone + Mennens ranking). The tail
+# beyond the most frequent few hundred variants cannot influence either.
+_LAYOUT_MAX_VARIANTS = 500
+
+# Per-request overrides a client may send in `params` — everything else in the
+# body is ignored (values are clamped again inside LayoutOptions.from_dict).
+# `h_gap`/`v_gap` stay out on purpose: the pixel grid is what lets the canvas
+# morph between layout modes instead of rescaling, and that is not the client's
+# to change. backbone-v2's routing knobs are safe — they only shape edges.
+_LAYOUT_PARAM_KEYS = frozenset(
+    {
+        "time_limit_s",
+        "allow_horizontal_edges",
+        "lambda_sq",
+        "lambda_end",
+        "paper_compat_metrics",
+        "seed",
+        "max_ip_nodes",
+        "route_clearance",
+        "port_gap",
+        "min_track_gap",
+        "max_fillet_radius",
+        "merge_len",
+        "arrow_gap",
+        "pair_bow",
+        "route_budget_ms",
+    }
+)
+
+
+class LayoutNodeIn(BaseModel):
+    id: str
+    width: float = 220.0
+    height: float = 59.0
+
+
+class DfgLayoutRequest(BaseModel):
+    algorithm: Literal["backbone", "backbone-v2", "sugiyama"] = "backbone"
+    nodes: list[LayoutNodeIn] = Field(default_factory=list)
+    edges: list[tuple[str, str]] = Field(default_factory=list)
+    start_id: str | None = None
+    end_id: str | None = None
+    params: dict[str, float | bool] | None = None
+
+
+def _layout_options(config: Any, params: dict[str, Any] | None) -> dict[str, Any]:
+    """Resolve layout options: module config < whitelisted request params."""
+
+    def _cfg(key: str, default: float) -> float:
+        try:
+            value = config.get(key, None) if config is not None else None
+            return float(value) if value is not None else default
+        except (TypeError, ValueError):
+            return default
+
+    options: dict[str, Any] = {
+        "time_limit_s": _cfg("layout_solver_time_limit_s", 10.0),
+        "lambda_sq": _cfg("layout_lambda_sq", 1.0),
+        "lambda_end": _cfg("layout_lambda_end", 1.0),
+        "allow_horizontal_edges": bool(
+            config.get("layout_allow_horizontal_edges", True) if config is not None else True
+        ),
+    }
+    for key, value in (params or {}).items():
+        if key in _LAYOUT_PARAM_KEYS:
+            options[key] = value
+    return options
+
+
+def _layout_cache_key(body: DfgLayoutRequest, options: dict[str, Any]) -> str:
+    """Digest of everything that determines the layout output.
+
+    LAYOUT_VERSION rotates keys whenever the algorithm code changes behavior;
+    re-import and config changes already wipe the module cache platform-side,
+    and ephemeral dashboard filters land in their own `_v_*` namespace — so the
+    freshness semantics are exactly those of GET /dfg.
+    """
+    payload = {
+        "v": LAYOUT_VERSION,
+        "alg": body.algorithm,
+        "nodes": sorted((n.id, round(n.width, 1), round(n.height, 1)) for n in body.nodes),
+        "edges": sorted([s, t] for s, t in body.edges),
+        "start": body.start_id,
+        "end": body.end_id,
+        "opts": options,
+    }
+    digest = hashlib.blake2b(
+        json.dumps(payload, sort_keys=True, default=str).encode("utf-8"),
+        digest_size=8,
+    ).hexdigest()
+    return f"dfg_layout__{digest}"
 
 
 async def _cached_or_compute(
@@ -257,6 +364,38 @@ def _dfg_worker(path: str, variant_pct: float | None) -> dict[str, Any]:
     return serialize_dfg(dfg, start, end, durations=durations, mean_positions=mean_positions)
 
 
+def _dfg_layout_worker(
+    path: str, request: dict[str, Any], options: dict[str, Any]
+) -> dict[str, Any]:
+    """Compute a server-side layout for the client's visible subgraph.
+
+    The heavy imports (pandas here; networkx / ortools inside the pipeline)
+    stay worker-side: the API event loop never pays for them.
+    """
+    import pandas as pd
+
+    from .layout.pipeline import compute_layout
+
+    renamed = _rename_pm4py(pd.read_parquet(path))
+    ordered = renamed.sort_values(["case:concept:name", "time:timestamp"], kind="mergesort")
+    # Same variant recipe as _filter_variants_coverage: one activity tuple per
+    # case, counted — rank 1 is the most frequent variant (the backbone).
+    variant_per_case = ordered.groupby("case:concept:name", sort=False)["concept:name"].agg(tuple)
+    counts = variant_per_case.value_counts()
+    variants = [
+        ([str(activity) for activity in sequence], int(count))
+        for sequence, count in counts.head(_LAYOUT_MAX_VARIANTS).items()
+    ]
+    return compute_layout(
+        request["nodes"],
+        request["edges"],
+        variants,
+        request.get("start_id"),
+        request.get("end_id"),
+        options,
+    )
+
+
 def _petri_alpha_worker(path: str) -> dict[str, Any]:
     import pandas as pd
     import pm4py
@@ -380,8 +519,78 @@ def _prefix_tree_worker(path: str) -> dict[str, Any]:
     return serialize_prefix_tree(cases)
 
 
+def _top_counts(counts: Any, n: int) -> dict[str, int]:
+    """Top-``n`` entries of an ``{activity: frequency}`` mapping, by frequency."""
+    if not isinstance(counts, dict):
+        return {}
+    ordered = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:n]
+    return {str(k): int(v) for k, v in ordered}
+
+
 class DiscoveryModule(Module):
     id = "discovery"
+
+    guidance_system_prompt = (
+        "You are a process-mining analyst interpreting a discovered process "
+        "map (directly-follows graph) and model-size statistics for an event "
+        "log. Cite specific activity names, edge frequencies, and start/end "
+        "activities. Point out dominant paths, rework loops (edges leading "
+        "back to earlier activities) and unusually rare transitions. Suggest "
+        "concrete next steps when relevant."
+    )
+    guidance_user_prefix = "Interpret this discovered process map:"
+
+    async def guidance_payload(self, ctx: ModuleContext) -> dict[str, Any] | None:
+        """Compact summary of the cached discovery artifacts for AI guidance.
+
+        Derived exclusively from ``ctx.cache`` - never touches
+        ``ctx.event_log``, so it works under the restricted AI/MCP context
+        (where every raw event-log accessor raises). Returns ``None`` until
+        the import precompute (or a panel visit) has cached a DFG or a Petri
+        net.
+        """
+        dfg = await ctx.cache.get("dfg") if await ctx.cache.exists("dfg") else None
+        petri = (
+            await ctx.cache.get("petri_net_inductive")
+            if await ctx.cache.exists("petri_net_inductive")
+            else None
+        )
+        if not isinstance(dfg, dict) and not isinstance(petri, dict):
+            return None
+
+        payload: dict[str, Any] = {}
+        if isinstance(dfg, dict):
+            activities = [a for a in dfg.get("activities", []) if isinstance(a, dict)]
+            edges = [e for e in dfg.get("edges", []) if isinstance(e, dict)]
+            top_activities = sorted(activities, key=lambda a: a.get("frequency", 0), reverse=True)[
+                :10
+            ]
+            top_edges = sorted(edges, key=lambda e: e.get("frequency", 0), reverse=True)[:15]
+            payload["process_map"] = {
+                "activity_count": len(activities),
+                "edge_count": len(edges),
+                "top_activities_by_frequency": [
+                    {"activity": a.get("label") or a.get("id"), "frequency": a.get("frequency")}
+                    for a in top_activities
+                ],
+                "top_edges_by_frequency": [
+                    {
+                        "source": e.get("source"),
+                        "target": e.get("target"),
+                        "frequency": e.get("frequency"),
+                    }
+                    for e in top_edges
+                ],
+                "start_activities": _top_counts(dfg.get("start_activities"), 10),
+                "end_activities": _top_counts(dfg.get("end_activities"), 10),
+            }
+        if isinstance(petri, dict):
+            payload["petri_net_inductive"] = {
+                "places": len(petri.get("places", [])),
+                "transitions": len(petri.get("transitions", [])),
+                "arcs": len(petri.get("arcs", [])),
+            }
+        return payload
 
     # -- compute helpers (reusable from routes + precompute). Each offloads to a
     # process-pool core via `_offload` + the top-level `_*_worker` fns above; the
@@ -461,6 +670,73 @@ class DiscoveryModule(Module):
         # min_version=3: mean_trace_position was added in v3; force-recompute
         # older caches that don't have it (v2 added durations).
         return await _cached_or_compute(ctx, "dfg", lambda: self._compute_dfg(ctx), min_version=3)
+
+    @route.post("/dfg/layout")
+    async def dfg_layout(
+        self, ctx: ModuleContext, *, body: DfgLayoutRequest | None = None
+    ) -> dict[str, Any]:
+        """Server-side layout for the client-filtered DFG subgraph.
+
+        Solver trouble is never a 5xx: the response's `solver.status` reports
+        optimal / feasible_timeout / fallback_* and coordinates are always
+        present. Only protocol errors are 4xx.
+        """
+        if body is None:
+            raise HTTPException(status_code=422, detail="Missing layout request body.")
+        if len(body.nodes) > _LAYOUT_MAX_NODES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Layout refused: {len(body.nodes)} nodes "
+                    f"(limit {_LAYOUT_MAX_NODES}). Filter the map down first."
+                ),
+            )
+        if len(body.edges) > _LAYOUT_MAX_EDGES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Layout refused: {len(body.edges)} edges "
+                    f"(limit {_LAYOUT_MAX_EDGES}). Filter the map down first."
+                ),
+            )
+        known = {node.id for node in body.nodes}
+        for source, target in body.edges:
+            if source not in known or target not in known:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Edge ({source!r}, {target!r}) references an unknown node id.",
+                )
+        for terminal in (body.start_id, body.end_id):
+            if terminal is not None and terminal not in known:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Terminal {terminal!r} is not in the node list.",
+                )
+
+        options = _layout_options(ctx.config, body.params)
+        options["algorithm"] = body.algorithm
+        if not body.nodes:
+            # Mirrors pipeline._empty_response without importing the compute
+            # chain (networkx et al.) into the API process.
+            return {
+                "kind": "dfg_layout",
+                "version": LAYOUT_VERSION,
+                "algorithm": body.algorithm,
+                "x": {},
+                "y": {},
+                "rank": {},
+                "order": {},
+                "edges": [],
+                "metrics": {},
+                "solver": {"status": "empty", "wall_ms": 0.0, "objective": None},
+                "wall_ms": 0.0,
+            }
+
+        key = _layout_cache_key(body, options)
+        request_payload = body.model_dump(mode="json")
+        return await _cached_or_compute(
+            ctx, key, lambda: _offload(ctx, _dfg_layout_worker, request_payload, options)
+        )
 
     @route.get("/petri-net/alpha")
     async def petri_alpha(self, ctx: ModuleContext) -> dict[str, Any]:

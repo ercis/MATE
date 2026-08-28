@@ -1,22 +1,21 @@
-import os
 import json
-import numpy as np
-import pandas as pd
-import utils.utilities as utils
-import utils.config as cfg
-import utils.vdd_helper as vdd_helper
-import utils.vdd_data_analysis as vdd
 import multiprocessing
+import os
 from functools import partial
 
-from pm4py import discover_dfg_typed
+import numpy as np
+import pandas as pd
+import utils.config as cfg
+import utils.utilities as utils
+import utils.vdd_data_analysis as vdd
+import utils.vdd_helper as vdd_helper
 from numpy import linalg as LA
+from pm4py import discover_dfg_typed
+from pm4py.objects.conversion.log import converter as log_converter
+from pm4py.objects.log.obj import EventLog
+from pm4py.objects.log.util import dataframe_utils
 from scipy import spatial
 from scipy.stats import wasserstein_distance
-from pm4py.objects.conversion.log import converter as log_converter
-from pm4py.objects.log.util import dataframe_utils
-from pm4py.objects.log.obj import EventLog
-from typing import Tuple
 from tqdm import tqdm
 
 
@@ -247,7 +246,7 @@ def vdd_pipeline():
 
 
 def log_to_windowed_dfg_count(event_log: EventLog, n_windows: int) \
-    -> Tuple[np.ndarray,list,dict,tuple]:
+    -> tuple[np.ndarray,list,dict,tuple]:
     """Convert event log to directly follows frequency counts for each activity.
 
     Args:

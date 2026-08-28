@@ -1,19 +1,28 @@
 import pandas as pd
-import numpy as np
-from source.utils import store_preprocessed_data
-from source.agent_types.discover_roles import discover_roles_and_calendars
+
+from source.activity_transition import (
+    compute_activity_transition_dict,
+    compute_activity_transition_dict_global,
+)
 from source.agent_types.discover_resource_calendar import discover_calendar_per_agent
+from source.agent_types.discover_roles import discover_roles_and_calendars
 from source.arrival_distribution import get_best_fitting_distribution
 from source.arrival_times import get_case_arrival_times
-from source.activity_transition import compute_activity_transition_dict, compute_activity_transition_dict_global
-from source.interaction_probabilities import calculate_agent_handover_probabilities_per_activity
 from source.extraneous_delays.config import (
     Configuration as ExtraneousActivityDelaysConfiguration,
+)
+from source.extraneous_delays.config import (
     TimerPlacement,
 )
-from source.extraneous_delays.delay_discoverer import compute_complex_extraneous_activity_delays, compute_naive_extraneous_activity_delays
+from source.extraneous_delays.delay_discoverer import (
+    compute_complex_extraneous_activity_delays,
+    compute_naive_extraneous_activity_delays,
+)
 from source.extraneous_delays.event_log import EventLogIDs
+from source.interaction_probabilities import calculate_agent_handover_probabilities_per_activity
 from source.simulation import BusinessProcessModel, Case
+from source.utils import store_preprocessed_data
+
 
 def discover_simulation_parameters(df_train, df_test, df_val, data_dir, num_cases_to_simulate, num_cases_to_simulate_val, determine_automatically=False, central_orchestration=False, discover_extr_delays=False):
     """
@@ -162,13 +171,19 @@ def _compute_activity_duration_distribution(df, res_calendars, roles):
         # if agent_calendar is None:
         #     continue
 
-        # Convert calendar to workday schedule
+        # Convert calendar to workday schedule. A day can carry SEVERAL work
+        # intervals (calendars are discovered as hourly granules, and logs with
+        # events at many hours of the day - SEPSIS-like - produce many islands
+        # per day). Keep them all: the previous `work_schedule[day] = (s, e)`
+        # kept only the *last* interval per day, so nearly every observed
+        # duration was booked as off-time and collapsed to 0 - the simulator
+        # then learned fix(0) everywhere and emitted instantaneous cases.
         work_schedule = {}
         for shift in agent_calendar:
             day = shift['from']  # e.g., 'MONDAY'
             start_time = pd.to_datetime(shift['beginTime']).time()  # e.g., '07:00:00'
             end_time = pd.to_datetime(shift['endTime']).time()  # e.g., '15:00:00'
-            work_schedule[day] = (start_time, end_time)
+            work_schedule.setdefault(day, []).append((start_time, end_time))
         
         for activity in activities:
             # print(f"activity: {activity}")
@@ -192,42 +207,37 @@ def _compute_activity_duration_distribution(df, res_calendars, roles):
                     day_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
                     day_end = day_start + pd.Timedelta(days=1)
                     
-                    # Get work hours for this day
+                    # Get the work intervals for this day
                     work_hours = work_schedule.get(day_name)
                     # print(f"work_hours: {work_hours}")
-                    if work_hours:
-                        work_start = day_start.replace(
-                            hour=work_hours[0].hour,
-                            minute=work_hours[0].minute,
-                            second=work_hours[0].second
-                        )
-                        work_end = day_start.replace(
-                            hour=work_hours[1].hour,
-                            minute=work_hours[1].minute,
-                            second=work_hours[1].second
-                        )
-                        
-                        # Calculate off time for this day
-                        day_activity_start = max(current_time, day_start)
-                        day_activity_end = min(end_time, day_end)
-                        
-                        # Before work hours
-                        if day_activity_start < work_start:
-                            off_end = min(work_start, day_activity_end)
-                            off_time += (off_end - day_activity_start).total_seconds()
-                            # print(f"off time before work hours: {(off_end - day_activity_start).total_seconds()}")
-                        
-                        # After work hours
-                        if day_activity_end > work_end:
-                            off_start = max(work_end, day_activity_start)
-                            off_time += (day_activity_end - off_start).total_seconds()
-                            # print(f"off time after work hours: {(day_activity_end - off_start).total_seconds()}")
+                    day_activity_start = max(current_time, day_start)
+                    day_activity_end = min(end_time, day_end)
+                    day_span = (day_activity_end - day_activity_start).total_seconds()
+                    if work_hours and day_span > 0:
+                        # Off time = the day's share of the activity minus the
+                        # part covered by any work interval (granule intervals
+                        # never overlap, so summing the overlaps is exact).
+                        covered = 0.0
+                        for interval_begin, interval_finish in work_hours:
+                            work_start = day_start.replace(
+                                hour=interval_begin.hour,
+                                minute=interval_begin.minute,
+                                second=interval_begin.second
+                            )
+                            work_end = day_start.replace(
+                                hour=interval_finish.hour,
+                                minute=interval_finish.minute,
+                                second=interval_finish.second
+                            )
+                            overlap_start = max(day_activity_start, work_start)
+                            overlap_end = min(day_activity_end, work_end)
+                            if overlap_end > overlap_start:
+                                covered += (overlap_end - overlap_start).total_seconds()
+                        off_time += max(day_span - covered, 0.0)
                     else:
                         # Full day off
-                        day_activity_start = max(current_time, day_start)
-                        day_activity_end = min(end_time, day_end)
-                        off_time += (day_activity_end - day_activity_start).total_seconds()
-                        # print(f"off time full day off: {(day_activity_end - day_activity_start).total_seconds()}")
+                        off_time += max(day_span, 0.0)
+                        # print(f"off time full day off: {max(day_span, 0.0)}")
                     # Move to next day
                     current_time = day_end
 
@@ -692,40 +702,33 @@ def determine_agent_behavior_type_and_extraneous_delays(simulation_parameters, d
             business_process_model.step(cases)
         simulated_log_val_autonomous = pd.DataFrame(business_process_model.simulated_events)
 
-        # 5) compute cycle time and check which one is closer to the val log
-        from log_distance_measures.config import EventLogIDs
-        from log_distance_measures.cycle_time_distribution import cycle_time_distribution_distance
-
-        # Set event log column ID mapping
-        event_log_ids = EventLogIDs(  # These values are stored in DEFAULT_CSV_IDS
-            case="case_id",
-            activity="activity_name",
-            start_time="start_timestamp",
-            end_time="end_timestamp",
-            resource='resource'
-        )
+        # 5) compute cycle time and check which one is closer to the val log.
+        # `log-distance-measures` is not installed in the module venv (its
+        # jellyfish pin has no cp312 wheel - see manifest.yaml), so use the
+        # local numpy/scipy re-implementation of the same EMD measure.
+        from source.validation_distance import cycle_time_distribution_distance
 
         ctdd_extr = cycle_time_distribution_distance(
-                    df_val, event_log_ids,  # First event log and its column id mappings
-                    simulated_log_val_extr, event_log_ids,  # Second event log and its column id mappings
+                    df_val,
+                    simulated_log_val_extr,
                     bin_size=pd.Timedelta(hours=1)  # Bins of 1 hour
                 )
-        
+
         ctdd = cycle_time_distribution_distance(
-                    df_val, event_log_ids,  # First event log and its column id mappings
-                    simulated_log_val_, event_log_ids,  # Second event log and its column id mappings
+                    df_val,
+                    simulated_log_val_,
                     bin_size=pd.Timedelta(hours=1)  # Bins of 1 hour
                 )
-        
+
         ctdd_extr_autonomous = cycle_time_distribution_distance(
-                    df_val, event_log_ids,  # First event log and its column id mappings
-                    simulated_log_val_extr_autonomous, event_log_ids,  # Second event log and its column id mappings
+                    df_val,
+                    simulated_log_val_extr_autonomous,
                     bin_size=pd.Timedelta(hours=1)  # Bins of 1 hour
                 )
-        
+
         ctdd_autonomous = cycle_time_distribution_distance(
-                    df_val, event_log_ids,  # First event log and its column id mappings
-                    simulated_log_val_autonomous, event_log_ids,  # Second event log and its column id mappings
+                    df_val,
+                    simulated_log_val_autonomous,
                     bin_size=pd.Timedelta(hours=1)  # Bins of 1 hour
                 )
         print(f"CTD extr + central: {ctdd_extr}")

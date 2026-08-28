@@ -5,7 +5,7 @@ def compute_activity_transition_dict_global(business_process_data):
 
     dict_ = {}
     for i in range(len(next_act)):
-        if sequence_parts[i] not in dict_.keys():
+        if sequence_parts[i] not in dict_:
             dict_[sequence_parts[i]] = {next_act[i]: 1}
         else:
             if next_act[i] not in dict_[sequence_parts[i]].keys():
@@ -35,7 +35,7 @@ def compute_activity_transition_dict(business_process_data):
         agent = active_agent[i]
 
         # Check if the sequence part exists in the dictionary
-        if sequence_parts[i] not in dict_.keys():
+        if sequence_parts[i] not in dict_:
             dict_[sequence_parts[i]] = {agent: {next_act[i]: 1}}
         else:
             # Check if the agent exists for the sequence part

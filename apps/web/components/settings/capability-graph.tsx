@@ -1,20 +1,11 @@
 "use client";
 
 import { useMemo } from "react";
-import {
-  Background,
-  Controls,
-  Handle,
-  Position,
-  ReactFlow,
-  type Edge,
-  type Node,
-  type NodeProps,
-} from "@xyflow/react";
-import "@xyflow/react/dist/style.css";
+import { Handle, Position, type Edge, type Node, type NodeProps } from "@xyflow/react";
 
 import { useModules } from "@/lib/queries";
 import { cn } from "@/lib/cn";
+import { CanvasShell } from "@/components/visualizations/canvases/shared/canvas-shell";
 
 interface CapabilityGraphProps {
   focusedModuleId: string;
@@ -47,24 +38,18 @@ export function CapabilityGraph({ focusedModuleId }: CapabilityGraphProps) {
     );
   }
 
+  // Shared canvas shell (fit / zoom / fullscreen toolbar + dotted grid). The
+  // graph is a small read-only dependency diagram, so the nodes/edges opt out
+  // of drag + select (see `buildGraph`) and the minimap is off.
   return (
-    <div className="h-[280px] overflow-hidden rounded-md border bg-card">
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        fitView
-        proOptions={{ hideAttribution: true }}
-        nodeTypes={NODE_TYPES}
-        nodesDraggable={false}
-        nodesConnectable={false}
-        elementsSelectable={false}
-        panOnDrag
-        zoomOnScroll={false}
-      >
-        <Background gap={16} size={1} className="opacity-50" />
-        <Controls showInteractive={false} className="!shadow-none" />
-      </ReactFlow>
-    </div>
+    <CanvasShell
+      nodes={nodes}
+      edges={edges}
+      nodeTypes={NODE_TYPES}
+      className="h-[280px] w-full overflow-hidden rounded-md border bg-card"
+      miniMap={false}
+      fitViewKey={`${focusedModuleId}-${nodes.length}`}
+    />
   );
 }
 
@@ -114,6 +99,7 @@ function buildGraph(modules: Mod[], focusedId: string): { nodes: Node[]; edges: 
         id: `${fromId}->${m.id}:${cap}`,
         source: fromId,
         target: m.id,
+        selectable: false,
         label: cap,
         labelStyle: { fontSize: 9 },
       });
@@ -148,6 +134,10 @@ function buildGraph(modules: Mod[], focusedId: string): { nodes: Node[]; edges: 
         id,
         type: "module",
         position: { x: r * x_gap, y: i * y_gap },
+        // Read-only diagram: CanvasShell enables drag/select by default, so opt
+        // each node out to preserve the static layout.
+        draggable: false,
+        selectable: false,
         data: { label: mod?.name ?? id, focused: id === focusedId },
       });
     });

@@ -1,7 +1,4 @@
 from dataclasses import dataclass, fields
-from typing import Optional
-
-import pandas as pd
 
 
 @dataclass

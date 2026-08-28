@@ -14,8 +14,15 @@ through manual verification.
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pytest
+
+# The graph pulls the module's own venv deps (langgraph/langchain), which the
+# platform venv does not carry. Skip instead of failing so
+# `uv run pytest modules/concept_drift_explainer/tests` stays runnable from the
+# repo's toolchain; the full suite runs on the module venv.
+pytest.importorskip("langchain_core")
 
 
 class _FakeIndex:
@@ -26,7 +33,7 @@ class _FakeIndex:
         self.queries += 1
 
         class _R:
-            matches = []
+            matches: ClassVar[list[object]] = []
 
         return _R()
 

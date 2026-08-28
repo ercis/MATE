@@ -8,7 +8,7 @@ populated by phase 5 - the column shape is fixed in v1.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, ClassVar
 
 from sqlalchemy import (
     JSON,
@@ -29,7 +29,7 @@ def _utcnow() -> datetime:
 
 
 class Base(DeclarativeBase):
-    type_annotation_map = {dict[str, Any]: JSON}
+    type_annotation_map: ClassVar[dict[Any, Any]] = {dict[str, Any]: JSON}
 
 
 class User(Base):
@@ -429,48 +429,6 @@ class ControlPolicy(Base):
     __table_args__ = (Index("ix_control_policies_scope", "scope"),)
 
 
-class StorageConfig(Base):
-    """Global (VM-wide) storage backend configuration - a single row.
-
-    Unlike :class:`UserSetting` this is *not* per-user: it selects where every
-    user's event logs and module outputs are durably stored. ``mode="local"``
-    (the default) keeps everything on disk exactly as before; ``mode="s3"``
-    treats a connected S3/Ceph-RGW bucket as the primary store while local disk
-    acts as a working cache (see ``mate.api.storage``). Set and edited only by
-    an admin via ``/api/v1/admin/storage``. The single row is keyed by the
-    constant :data:`SINGLETON_ID`.
-    """
-
-    __tablename__ = "storage_config"
-
-    SINGLETON_ID = "singleton"
-
-    id: Mapped[str] = mapped_column(String(16), primary_key=True, default=SINGLETON_ID)
-    mode: Mapped[str] = mapped_column(
-        String(8), default="local", server_default="local", nullable=False
-    )
-    endpoint_url: Mapped[str | None] = mapped_column(String(512))
-    bucket: Mapped[str | None] = mapped_column(String(255))
-    region: Mapped[str | None] = mapped_column(String(64))
-    access_key: Mapped[str | None] = mapped_column(String(255))
-    # Fernet ciphertext of the secret access key - never stored or returned in
-    # plaintext (see ``storage/config.py``).
-    secret_key_enc: Mapped[str | None] = mapped_column(Text)
-    # Ceph RGW and most non-AWS S3 need path-style addressing
-    # (``host/bucket/key`` rather than ``bucket.host/key``).
-    path_style: Mapped[bool] = mapped_column(
-        Boolean, default=True, server_default="1", nullable=False
-    )
-    use_ssl: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1", nullable=False)
-    prefix: Mapped[str] = mapped_column(String(255), default="", server_default="", nullable=False)
-    # Admin-entered total quota (bytes) for the storage-overview bar. Optional -
-    # S3 itself doesn't report it back without admin caps the RGW user lacks.
-    quota_bytes: Mapped[int | None] = mapped_column(Integer)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=_utcnow, onupdate=_utcnow, nullable=False
-    )
-
-
 class EventEdit(Base):
     """Audit trail for manual cell edits made via the Events tab.
 
@@ -570,6 +528,74 @@ class AnalyticsEvent(Base):
         Index("ix_analytics_events_occurred", "occurred_at"),
         Index("ix_analytics_events_type_occurred", "event_type", "occurred_at"),
     )
+
+
+class AnalyticsObject(Base):
+    """Registry row for one OCEL object observed in a user's UI log.
+
+    Implements the object side of the Abb & Rehse reference data model for
+    process-related UI logs (Information Systems 124 (2024) 102386): UI
+    elements, UI groups, applications, systems, users, tasks - plus platform
+    resources (logs, dashboards, modules, jobs) for server-side events. The
+    ``object_id`` embeds its type as a prefix (``elem:``/``group:``/``app:``/
+    ``system:``/``user:``/``task:``/``job:``/...) and is a stable digest so the
+    same on-screen element upserts into the same row across sessions. ``attrs``
+    carries the OCEL object attributes (tag, role, label, selector, ...).
+    """
+
+    __tablename__ = "analytics_objects"
+
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    object_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    object_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    attrs: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+
+    __table_args__ = (Index("ix_analytics_objects_user_type", "user_id", "object_type"),)
+
+
+class AnalyticsObjectRelation(Base):
+    """Static object-to-object relation (OCEL O2O), e.g. ``part_of`` chains.
+
+    Mirrors the paper's UI hierarchy: element part_of group, group part_of
+    group/application, application part_of system. Rows are naturally
+    idempotent - the full tuple is the primary key and ingest upserts with
+    ON CONFLICT DO NOTHING.
+    """
+
+    __tablename__ = "analytics_object_relations"
+
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    src_object_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    tgt_object_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    qualifier: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+    __table_args__ = (Index("ix_analytics_object_relations_user_src", "user_id", "src_object_id"),)
+
+
+class AnalyticsEventObject(Base):
+    """Event-to-object relation (OCEL E2O) with a qualifier.
+
+    Written at ingest alongside the event rows; cascades away with its event.
+    ``user_id`` is denormalised (no FK - the event FK already cascades on user
+    deletion) so admin exports can filter without joining through events.
+    """
+
+    __tablename__ = "analytics_event_objects"
+
+    event_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("analytics_events.id", ondelete="CASCADE"), primary_key=True
+    )
+    object_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    qualifier: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False)
+
+    __table_args__ = (Index("ix_analytics_event_objects_user_object", "user_id", "object_id"),)
 
 
 class Dashboard(Base):
@@ -690,3 +716,37 @@ class DashboardShare(Base):
         Index("ix_dashboard_shares_target_user", "target_user_id"),
         Index("ix_dashboard_shares_target_team", "target_team_id"),
     )
+
+
+class ApiToken(Base):
+    """Per-user personal access token (PAT) for non-browser API access.
+
+    The only machine-to-machine credential the platform issues: Keycloak only
+    mints short-lived, browser-bound access tokens, so an external MCP client
+    (Claude Desktop, claude.ai, a customer agent) authenticates with one of
+    these instead. The plaintext secret (``mate_pat_<random>``) is shown to the
+    user exactly once at creation and never stored - only its ``token_hash``
+    (blake2b) is persisted, so a DB leak can't reconstruct a usable token.
+    ``token_prefix`` keeps a non-secret fragment for display in the UI. A token
+    is non-admin by construction (it resolves to its owner with no roles).
+    """
+
+    __tablename__ = "api_tokens"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    token_prefix: Mapped[str] = mapped_column(String(32), nullable=False)
+    # Granted OAuth-style scopes (e.g. ["processes:read", "modules:read"]). An
+    # empty list means "all read scopes" (back-compat for tokens minted before
+    # scoping). Enforced per MCP tool.
+    scopes: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime)
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    __table_args__ = (Index("ix_api_tokens_user", "user_id"),)

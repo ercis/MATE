@@ -1,0 +1,36 @@
+id: sample_cards
+name: Sample Cards Module
+version: 0.1.0
+category: foundation
+description: Test fixture exercising per-card admin control (config + ai + model cards).
+license: MIT
+
+dependencies:
+  python:
+    inherit:
+      - duckdb
+      - pandas
+    isolation: in_process
+
+config_schema:
+  type: object
+  properties:
+    threshold:
+      type: number
+      title: Threshold
+      default: 0.5
+    mode:
+      type: string
+      title: Mode
+      default: fast
+
+ai_models:
+  self_hosted: false
+  llm:
+    title: Agent model
+    description: The chat LLM.
+
+model_store:
+  title: Detection model
+  accept: .bin
+  config_key: model

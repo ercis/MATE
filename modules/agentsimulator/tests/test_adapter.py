@@ -100,14 +100,42 @@ def test_build_input_csv_missing_start_dropped_missing_end_filled(tmp_path):
     assert stats["events"] == len(df) - 1
 
 
-def test_build_input_csv_without_end_column(tmp_path):
-    # Most real logs (Helpdesk, BPIC, SEPSIS) have a single timestamp.
+def test_build_input_csv_without_end_column_derives_gap_durations(tmp_path):
+    # Most real logs (Helpdesk, BPIC, SEPSIS) have a single timestamp. With
+    # `end = start` everywhere the simulator would learn all-zero durations and
+    # emit instantaneous cases (the sim cycle-time distribution collapses to a
+    # spike at 0), so the adapter derives each event's end from the case's next
+    # event start. Case-level spans are preserved exactly.
     df = _canonical_log(n_cases=5).drop(columns=["end_timestamp"])
     out = tmp_path / "input.csv"
     stats = adapter.build_input_csv(df, out)
     assert stats["events"] == len(df)
+
     written = pd.read_csv(out)
-    assert (written["start_time"] == written["end_time"]).all()  # end fell back to start
+    start = pd.to_datetime(written["start_time"])
+    end = pd.to_datetime(written["end_time"])
+
+    last = written.groupby("case_id").tail(1).index
+    mid = written.index.difference(last)
+    # Non-final events end when the next event starts (2h spacing in fixture)…
+    assert (end[mid] - start[mid] == pd.Timedelta(hours=2)).all()
+    # …the final event of a case stays zero-duration…
+    assert (end[last] == start[last]).all()
+    # …so the case span (first start → last end) equals the original
+    # first→last timestamp span (4 events, 2h apart = 6h).
+    span = end.groupby(written["case_id"]).max() - start.groupby(written["case_id"]).min()
+    assert (span == pd.Timedelta(hours=6)).all()
+
+
+def test_build_input_csv_real_end_timestamps_untouched(tmp_path):
+    # A log with genuine durations must NOT get the gap-fallback rewrite.
+    df = _canonical_log(n_cases=4)  # end_timestamp = start + 1h everywhere
+    out = tmp_path / "input.csv"
+    adapter.build_input_csv(df, out)
+    written = pd.read_csv(out)
+    start = pd.to_datetime(written["start_time"])
+    end = pd.to_datetime(written["end_time"])
+    assert (end - start == pd.Timedelta(hours=1)).all()
 
 
 def test_compute_summaries_shapes():
@@ -170,6 +198,32 @@ def test_to_download_csv_normalises():
     csv = adapter.to_download_csv(sim)
     head = csv.splitlines()[0]
     assert head.split(",") == ["case_id", "activity", "resource", "start", "end"]
+
+
+def test_to_download_xes_is_valid_xes():
+    # The simulated log (agent col, activity_name, start/end timestamps) must
+    # export as a valid XES document carrying the standard concept/org/time
+    # attributes plus the retained start_timestamp.
+    _, sim = _agentsim_shapes(_canonical_log(n_cases=4))
+    xes = adapter.to_download_xes(sim)
+
+    assert isinstance(xes, str)
+    assert xes.lstrip().startswith("<?xml")
+    assert "<log" in xes and "</log>" in xes
+    # XES-standard attribute keys the export maps to.
+    for key in ("concept:name", "org:resource", "time:timestamp", "start_timestamp"):
+        assert key in xes, key
+    # Activities survive the round-trip.
+    assert "receive" in xes and "notify" in xes
+
+
+def test_to_download_xes_handles_degenerate_timestamps():
+    # Single-timestamp / zero-duration simulated logs (the real-world schema)
+    # must still export valid XES, not blow up on the NaT-free fallback path.
+    _, sim = _real_sim_shapes(n_cases=5)
+    xes = adapter.to_download_xes(sim)
+    assert xes.lstrip().startswith("<?xml")
+    assert "concept:name" in xes
 
 
 def test_compute_fidelity_identical_logs_are_zero():
@@ -285,6 +339,75 @@ def test_normalize_keeps_rows_with_unparseable_end():
     assert len(d2) == len(sim2) - 1
 
 
+# ── regression: fidelity-path duration handling for the simulated output ───
+#
+# The gap-fill in build_input_csv only rewrites the *real* log fed to the
+# simulator. The comparison side must handle the *simulated output's* durations
+# the same way, or the time-based fidelity scores collapse. `adapter._normalize`
+# (summaries) already did; `metrics.align_for_metrics` (fidelity, metrics.py:148)
+# did not - a missing/unparsable end column raised straight out of
+# compute_fidelity (align is called outside its per-measure guard), blanking all
+# five measures at once. These lock the two paths to the same behaviour.
+
+
+def test_align_for_metrics_derives_end_when_column_missing():
+    """A single-timestamp simulated log (no end column) must not crash: `end`
+    falls back to `start`, so case durations come from the event spread, not NaT.
+    """
+    _, sim = _real_sim_shapes(n_cases=6)
+    sim = sim.drop(columns=["end_timestamp"])
+    aligned = metrics.align_for_metrics(sim)
+    assert "end_time" in aligned.columns
+    assert len(aligned) == len(sim), "rows were dropped when only end was missing"
+    assert (aligned["end_time"] == aligned["start_time"]).all()
+
+
+def test_align_for_metrics_tolerates_unparseable_timestamps():
+    """Unparsable timestamps degrade their own row instead of raising: a bad end
+    falls back to start (row kept); a bad start drops just that row. Previously
+    either raised and crashed compute_fidelity, wiping all five measures."""
+    _, sim = _real_sim_shapes(n_cases=5)
+    bad_end = sim.copy()
+    bad_end["end_timestamp"] = "not-a-date"  # every end unparseable
+    aligned = metrics.align_for_metrics(bad_end)
+    assert len(aligned) == len(sim), "a bad end must not drop rows"
+    assert (aligned["end_time"] == aligned["start_time"]).all(), "end did not fall back"
+
+    bad_start = sim.copy()
+    bad_start.loc[0, "start_timestamp"] = "nope"
+    aligned2 = metrics.align_for_metrics(bad_start)
+    assert len(aligned2) == len(sim) - 1, "a bad start must drop exactly its row"
+
+
+def test_compute_fidelity_survives_degenerate_end_and_stays_nondegenerate():
+    """The fidelity path must handle the simulated output's durations like the
+    real log's. A simulated log with a missing/unparsable end used to raise out
+    of compute_fidelity and blank all five measures; it must now score. And the
+    duration-based measures must reflect the case *spans* (recovered from the
+    2h-spread events), not collapse to a spike at 0."""
+    test_df, sim = _real_sim_shapes(n_cases=25)  # zero-duration but 2h-spread events
+
+    for mutate in (
+        lambda d: d.drop(columns=["end_timestamp"]),  # no end column at all
+        lambda d: d.assign(end_timestamp="not-a-date"),  # unparsable end
+    ):
+        fid = metrics.compute_fidelity(test_df, [mutate(sim.copy())])
+        assert set(fid) == {"NGD", "AEDD", "CEDD", "REDD", "CTDD"}
+        for key, cell in fid.items():
+            assert cell["mean"] is not None, f"{key} was dropped (measure blanked)"
+            assert cell["values"], f"{key} has no per-run value"
+
+    # Case durations are recovered from the event spread, so a real span change
+    # is still detectable - proof the simulated distribution isn't collapsed to 0.
+    longer = sim.copy()
+    st = pd.to_datetime(longer["start_timestamp"], utc=True)
+    case_start = st.groupby(longer["case_id"]).transform("min")
+    longer["start_timestamp"] = case_start + (st - case_start) * 3  # triple each span
+    longer["end_timestamp"] = longer["start_timestamp"]
+    fid = metrics.compute_fidelity(test_df, [longer])
+    assert fid["CTDD"]["mean"] > 0, "CTDD blind to case-span change ⇒ durations collapsed"
+
+
 # ── regression: the /results stale-cache guard (_result_is_current) ────────
 
 
@@ -330,3 +453,83 @@ def test_result_is_current_rejects_none_and_non_dict():
     assert _result_is_current(None) is False
     assert _result_is_current("nope") is False
     assert _result_is_current(["list"]) is False
+
+
+# ── regression: per-run download index (subprocess query-param passthrough) ─
+
+
+def test_parse_log_index_reads_subprocess_passthrough_params():
+    from modules.agentsimulator.module import (  # pyright: ignore[reportPrivateUsage]
+        _parse_log_index,
+    )
+
+    # The only query params a subprocess route forwards are the stub's own
+    # `args` / `kwargs`; the panel sends the run index as `?args=<i>` and the
+    # export format as `?kwargs=<fmt>`, so the index reads `args` only.
+    assert _parse_log_index({}) == 0
+    assert _parse_log_index({"args": None, "kwargs": None}) == 0
+    assert _parse_log_index({"args": "3", "kwargs": None}) == 3
+    assert _parse_log_index({"args": None, "kwargs": "2"}) == 0  # kwargs is the format, not index
+    assert _parse_log_index({"args": "3", "kwargs": "xes"}) == 3  # format doesn't disturb the index
+    assert _parse_log_index({"args": 4}) == 4
+    assert _parse_log_index({"args": "junk"}) == 0  # unparsable → default run
+    assert _parse_log_index({"args": "99"}) == 9  # clamped to num_simulations max
+    assert _parse_log_index({"args": "-4"}) == 0
+
+
+def test_parse_format_reads_kwargs_channel():
+    from modules.agentsimulator.module import (  # pyright: ignore[reportPrivateUsage]
+        _parse_format,
+    )
+
+    # Format travels as `?kwargs=<csv|xes>`; only an explicit `xes` selects XES,
+    # everything else (missing, csv, junk) stays CSV for backward compatibility.
+    assert _parse_format({}) == "csv"
+    assert _parse_format({"args": "0", "kwargs": None}) == "csv"
+    assert _parse_format({"args": "0", "kwargs": "csv"}) == "csv"
+    assert _parse_format({"args": "0", "kwargs": "xes"}) == "xes"
+    assert _parse_format({"kwargs": "XES"}) == "xes"  # case-insensitive
+    assert _parse_format({"kwargs": " xes "}) == "xes"  # whitespace-tolerant
+    assert _parse_format({"kwargs": "json"}) == "csv"  # unknown → default csv
+
+
+# ── regression: determine_automatically distance (log-distance-measures drop) ─
+
+
+def _val_shaped_log(n_cases: int = 12, span_h: int = 6) -> pd.DataFrame:
+    """Frames shaped like the auto-mode trials: `df_val` / trial simulated logs
+    (case_id + start_timestamp/end_timestamp), each case spanning ``span_h``."""
+    base = pd.Timestamp("2022-01-03 09:00:00+00:00")
+    rows: list[dict[str, object]] = []
+    for c in range(n_cases):
+        s = base + pd.Timedelta(hours=c)
+        for i, a in enumerate(("a", "b")):
+            t = s + pd.Timedelta(hours=span_h * i)
+            rows.append(
+                {"case_id": c, "activity_name": a, "start_timestamp": t, "end_timestamp": t}
+            )
+    return pd.DataFrame(rows)
+
+
+def test_cycle_time_distribution_distance_ranks_like_the_dropped_package():
+    """`determine_automatically` crashed with ModuleNotFoundError because
+    log-distance-measures is deliberately not installed; the local numpy/scipy
+    EMD replacement must produce sane, rankable distances."""
+    from modules.agentsimulator.source.validation_distance import (
+        cycle_time_distribution_distance,
+    )
+
+    real = _val_shaped_log(span_h=6)
+    same = _val_shaped_log(span_h=6)
+    near = _val_shaped_log(span_h=8)
+    far = _val_shaped_log(span_h=30)
+
+    assert cycle_time_distribution_distance(real, same) == 0.0
+    d_near = cycle_time_distribution_distance(real, near)
+    d_far = cycle_time_distribution_distance(real, far)
+    assert 0.0 < d_near < d_far
+    assert d_far == pytest.approx(24.0, abs=1e-6)  # 30h vs 6h ⇒ 24 one-hour bins
+
+    # A degenerate (empty) trial simulation can never win the ranking.
+    assert cycle_time_distribution_distance(real, pd.DataFrame()) == float("inf")
+    assert cycle_time_distribution_distance(pd.DataFrame(), real) == float("inf")

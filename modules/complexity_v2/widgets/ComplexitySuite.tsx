@@ -1,14 +1,15 @@
 "use client";
 
+import { metricInfoContent } from "../panel/metric-info";
 import { formatMetric, useComplexityV2 } from "../panel/queries";
-import { CardShell, KpiTile } from "./_kit";
+import { CardShell, KpiGrid, KpiTile } from "@/components/dashboards/kit";
 
-/** Headline metrics across the thesis categories, one KPI tile each. */
-export default function ComplexitySuite({ logId }: { logId: string }) {
-  const { data, isLoading, isError } = useComplexityV2(logId);
-  const v = data?.values;
-
-  const tiles: { key: string; label: string; hint?: string }[] = [
+/**
+ * The measures this card can show. Keys must match `kpis:` in `manifest.yaml`
+ * and the keys in `panel/metric-info`, so the ⓘ text and citation come from
+ * the same place as the panel's.
+ */
+const TILES: { key: string; label: string; hint?: string }[] = [
     { key: "n_events", label: "#-e", hint: "events" },
     { key: "n_event_types", label: "#-et", hint: "event types" },
     { key: "perc_unique_seq", label: "perc-unique-seq" },
@@ -17,21 +18,38 @@ export default function ComplexitySuite({ logId }: { logId: string }) {
     { key: "avg_edit_distance", label: "avg-edit-distance" },
     { key: "structural_var", label: "structural-var" },
     { key: "n_acyclic_paths", label: "#-acyclic-paths" },
-  ];
+];
+
+/** Headline metrics across the thesis categories, one KPI tile each. */
+export default function ComplexitySuite({
+  logId,
+  config,
+}: {
+  logId: string;
+  config?: Record<string, unknown>;
+}) {
+  const { data, isLoading, isError } = useComplexityV2(logId);
+  const v = data?.values;
+
+  // No stored selection shows everything — a card placed before this was
+  // subsettable must never come back empty.
+  const chosen = Array.isArray(config?.kpis) ? (config.kpis as string[]) : null;
+  const shown = chosen ? TILES.filter((t) => chosen.includes(t.key)) : TILES;
 
   return (
-    <CardShell loading={isLoading} empty={isError || !v}>
+    <CardShell loading={isLoading} error={isError} empty={!v || shown.length === 0}>
       {v && (
-        <div className="grid grid-cols-2 gap-2">
-          {tiles.map((t) => (
+        <KpiGrid minTileWidth={140}>
+          {shown.map((t) => (
             <KpiTile
               key={t.key}
               label={t.label}
               value={formatMetric(t.key, v[t.key] ?? null, v)}
               hint={t.hint}
+              info={metricInfoContent(t.key)}
             />
           ))}
-        </div>
+        </KpiGrid>
       )}
     </CardShell>
   );

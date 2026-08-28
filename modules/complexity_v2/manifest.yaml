@@ -1,5 +1,5 @@
 id: complexity_v2
-name: Complexity v2
+name: Complexity V2
 version: 1.0.0
 category: advanced
 description: >-
@@ -7,7 +7,32 @@ description: >-
   and trace distance (including edit distance and structural variety), plus the
   directly-follows transition-probability matrix. Based on Langer's thesis on
   business process complexity.
-author: E. Langer
+about: >-
+  Get the full complexity picture of your process in one run: 28 metrics
+  covering size, variation, entropy, and how far your cases drift apart
+  (edit distance, structural variety), plus the transition-probability matrix
+  between activities. Use it to benchmark processes against each other, find
+  out whether complexity comes from many variants or from long unpredictable
+  traces, and identify the transitions that make behaviour hard to predict.
+source:
+  - title: >-
+      Understanding business process complexity: Exploring metrics,
+      relationships, and temporal dynamics in the context of process drift
+    fullCitation: >-
+      E. Langer, "Understanding business process complexity: Exploring metrics,
+      relationships, and temporal dynamics in the context of process drift,"
+      master's thesis, University of Münster, 2025
+  - title: >-
+      The connection between process complexity of event sequences and models
+      discovered by process mining
+    fullCitation: >-
+      A. Augusto, J. Mendling, M. Vidgof, and B. Wurm, "The connection between
+      process complexity of event sequences and models discovered by process
+      mining," Inf. Sci., vol. 598, pp. 196-215, 2022
+    url: https://doi.org/10.1016/j.ins.2022.03.072
+artifacts:
+  - name: Master Thesis Assessment of Process Complexity Measures
+    url: https://github.com/MrWaitomo/WWU_processcomplexity
 license: MIT
 default_enabled: true
 # Runs entirely locally – safe to use against confidential event logs.
@@ -50,19 +75,42 @@ frontend:
       title: Complexity suite (v2)
       description: Headline metrics across size, variation, distance and entropy.
       icon: Sigma
-      # Fixed-size metric scorecard (8 tiles): locked to a size that shows them all.
-      default_w: 7
+      # Metric scorecard (8 tiles): min sized to show them all.
+      default_w: 4
       default_h: 15
-      resizable: false
+      min_w: 3
+      min_h: 6
+      # Keys match TILES in widgets/ComplexitySuite.tsx and panel/metric-info.
+      kpis:
+        - { id: n_events, title: Events }
+        - { id: n_event_types, title: Event types }
+        - { id: perc_unique_seq, title: Unique sequences, info: Share of cases whose path occurs only once. }
+        - { id: nseq_e, title: Normalized sequence entropy }
+        - { id: activity_var, title: Activity variation, info: Shannon entropy over the activity mix. }
+        - { id: avg_edit_distance, title: Avg edit distance, default: false }
+        - { id: structural_var, title: Structural variation, default: false }
+        - { id: n_acyclic_paths, title: Acyclic paths, default: false }
+      min_px_w: 300
+      min_px_h: 360
+      help:
+        what: "The extended complexity measure suite for this log."
+        read: "Higher means more variation. The measures capture different aspects, so read them together rather than picking one."
+        computed: "Computed over the filtered log."
     - id: complexity-v2-categories
       entry: ./widgets/ComplexityCategories.tsx
       title: Complexity metrics by category
       description: Every thesis metric (Table 3.3) grouped by category.
       icon: Table
-      default_w: 6
+      default_w: 3
       default_h: 9
-      min_w: 5
+      min_w: 3
       min_h: 7
+      min_px_w: 300
+      min_px_h: 240
+      help:
+        what: "Complexity broken down by category."
+        read: "Shows WHERE the complexity comes from — structure, behaviour, or data — which points at what kind of intervention would help."
+        computed: "Category aggregation of the extended measure suite."
   page_layout:
     - section: Overview
       widgets: [complexity-v2-suite]

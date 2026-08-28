@@ -5,7 +5,7 @@ import { toast } from "sonner";
 
 import { toastError } from "@/lib/toast";
 
-import { Button } from "@/components/ui/button";
+import { ActionButton } from "@/components/ui/action-button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { EventLogDetail } from "@/lib/api-types";
@@ -66,14 +66,16 @@ export function GeneralSection({ logId, log }: { logId: string; log: EventLogDet
           />
         </div>
         <div className="flex justify-end pt-1">
-          <Button
+          <ActionButton
             size="sm"
-            disabled={!dirty || update.isPending}
+            disabled={!dirty}
+            isPending={update.isPending}
+            isSuccess={update.isSuccess}
             onClick={onSave}
             className="cursor-pointer"
           >
             {update.isPending ? "Saving…" : "Save"}
-          </Button>
+          </ActionButton>
         </div>
       </div>
     </SectionShell>

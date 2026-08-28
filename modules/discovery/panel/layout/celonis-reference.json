@@ -1,0 +1,30 @@
+{
+  "_source": "Measured from a live Celonis Process Explorer (academic cloud) rendering the same trace_data process, 2026-07-09. Layout units = CSS px at zoom 1 (extracted through the graph__canvas matrix, scale 0.38498).",
+  "edge": {
+    "structure": ["path.graph-edge__track (transparent hit area, width = line+2..4)", "path.graph-edge__line (visible)", "path.graph-edge__marker (arrow triangle, separate path)"],
+    "color": "rgb(36, 148, 153)",
+    "strokeWidthPx": { "min": 1, "max": 12, "mapping": "≈ ceil(12 * frequency / maxFrequency), observed: 1K→1, 7.9K→3, 12.4K→4, 17.2K→4-5, 36.7K→8, 40.8K→9, 58.4K→12" },
+    "arrow": { "path": "M 9.746 0 L 0 9.997 L 0.006 -10.003 Z", "scaleByWidth": "0.5 for thin (≤2px) up to 1 for thick", "fill": "same teal", "lineStopsShortOfNodePx": 12 },
+    "shapes": {
+      "sameColumnVertical": "single cubic, control points ~28%/61% of Δy: M224 52.37C224 67.99,224 89.65,224 108.5",
+      "neighborColumnDiagonal": "single near-straight chord cubic (controls ~30%/66% ALONG the chord): M215.7 1380.38C248.7 1398.78,291.41 1422.59,326.17 1441.97",
+      "shortRebend": "two chained cubics: M166.52 967.64C167.77 954.9,167.84 938.61,163 925C161.1 919.65,158.41 914.45,155.3 909.53",
+      "longLoopBack": "arc out → degenerate-cubic straight vertical at fixed lane x → arc back in, entering the target at an angle: M91.23 1687.58C63.42 1668.33,30 1637.24,30 1599C30 989,30 989,30 989C30 957.49,50.48 929.05,71.8 908"
+    }
+  },
+  "edgeLabel": { "class": "graph-edge__label__container", "bg": "white", "border": "1px solid lightgrey(oklch .87)", "radiusPx": 11, "fontPx": 11, "content": "icon + abbreviated count (1K, 36.7K, 58.4K)" },
+  "node": {
+    "activity": { "widthPx": "content-based ≤ 220", "heightPx": "43 one-line / 59 two-line", "bg": "white", "border": "1px solid oklch(0.8698 0.0137 286)", "radiusPx": 8, "padding": "4px 16px 4px 8px", "shadow": "subtle 1px", "title": "Inter 13px/400 oklch(0.2469 0.0749 260.8)", "subtitle(count)": "11px/500, 63% opacity", "encodingIcon": "20x20 leading (teal ring/KPI)" },
+    "startEnd": { "size": "≈112x43 pill", "content": "dot + Start/End + count" }
+  },
+  "layout": { "rowGapPx": "≈69 between node bottom and next top (row pitch ~112 for 43-tall nodes)", "columns": "chain nodes near-centered with slight stagger; loop lanes at far x (30 / 376 in sample)" },
+  "samplePathsPx": [
+    { "d": "M224 52.37C224 67.99,224 89.65,224 108.5", "w": 1 },
+    { "d": "M157.72 1500.37C159.99 1518.25,163.27 1544.03,165.87 1564.47", "w": 8 },
+    { "d": "M166.52 967.64C167.77 954.9,167.84 938.61,163 925C161.1 919.65,158.41 914.45,155.3 909.53", "w": 4 },
+    { "d": "M384.23 1447.56C380.52 1422.08,376 1384.21,376 1351C376 989,376 989,376 989C376 924.01,307.28 894.68,240.91 881.51", "w": 1 },
+    { "d": "M95.02 900.45C87.16 913.78,82.15 929.53,89.6 943C93.32 949.72,98.47 955.59,104.34 960.68", "w": 12 },
+    { "d": "M91.23 1687.58C63.42 1668.33,30 1637.24,30 1599C30 989,30 989,30 989C30 957.49,50.48 929.05,71.8 908", "w": 8 },
+    { "d": "M108.63 599.63C106.31 591.74,104.18 583.13,103 575C101.85 567.08,102.95 565,103 557C103.52 468.85,82.68 436.77,126 360C139.61 335.87,162.13 314.73,182.16 299.12", "w": 1 }
+  ]
+}

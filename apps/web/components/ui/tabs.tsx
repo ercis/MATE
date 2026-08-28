@@ -82,7 +82,13 @@ function TabsContent({
   return (
     <TabsPrimitive.Content
       data-slot="tabs-content"
-      className={cn("flex-1 outline-none", className)}
+      // Radix unmounts inactive content, so the entry animation replays on
+      // every tab switch – a 200ms fade + 4px rise instead of an abrupt swap.
+      className={cn(
+        "flex-1 outline-none",
+        "data-[state=active]:animate-in data-[state=active]:fade-in-0 data-[state=active]:slide-in-from-bottom-1 data-[state=active]:duration-200",
+        className
+      )}
       {...props}
     />
   )

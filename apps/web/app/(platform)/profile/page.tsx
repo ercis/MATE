@@ -1,7 +1,7 @@
 "use client";
 
 import { LogOut, Mail, ShieldCheck, UserRound } from "lucide-react";
-import { signOut, useSession } from "next-auth/react";
+import { useSession } from "next-auth/react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -68,13 +68,15 @@ export default function ProfilePage() {
           <p>
             Sign out to end your session here and on the identity provider.
           </p>
-          <Button
-            variant="destructive"
-            className="cursor-pointer gap-2"
-            onClick={() => void signOut({ callbackUrl: "/login" })}
-          >
-            <LogOut className="h-3.5 w-3.5" />
-            Sign out
+          {/* Plain navigation through GET /logout (not a fetch-based signOut())
+              so signing out still works when an extension / content blocker /
+              stale service worker intercepts fetches – the failure mode behind
+              the Safari login loop. */}
+          <Button variant="destructive" className="cursor-pointer gap-2" asChild>
+            <a href="/logout">
+              <LogOut className="h-3.5 w-3.5" />
+              Sign out
+            </a>
           </Button>
         </CardContent>
       </Card>

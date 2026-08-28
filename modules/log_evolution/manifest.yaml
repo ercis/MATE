@@ -1,13 +1,18 @@
 id: log_evolution
-name: Log evolution
+name: Log Evolution
 version: 1.0.0
 category: advanced
 description: >-
   Shows how your log grows and shifts over time: case arrivals versus
   completions, work in progress, the changing activity mix, and a dotted chart
   of every event. Makes growth, backlogs, seasonality, and drift easy to spot.
+about: >-
+  See how your log grows and shifts over time: case arrivals versus completions,
+  work in progress, the changing activity mix, and a dotted chart of every
+  single event. Use it to spot growing backlogs, seasonality, and creeping
+  behaviour changes - or to check whether a process redesign actually changed
+  how work arrives and gets done.
 keywords: ["log evolution", "over time", "case arrivals", "work in progress", "wip", "dotted chart", "backlog", "seasonality"]
-author: FlowFactory
 license: MIT
 default_enabled: true
 # Runs entirely locally – safe to use against confidential event logs.
@@ -40,6 +45,8 @@ dependencies:
     inherit:
       - pandas
     isolation: in_process
+    # Precompute runs in a killable child process so Cancel/shutdown stop it.
+    execution: worker
 
 frontend:
   panel: ./panel/index.tsx
@@ -49,9 +56,9 @@ frontend:
       title: Arrivals & completions
       description: Cases started vs. completed per period - growth, backlog and seasonality.
       icon: TrendingUp
-      default_w: 8
+      default_w: 4
       default_h: 7
-      min_w: 6
+      min_w: 3
       min_h: 7
       config_schema:
         properties:
@@ -64,15 +71,20 @@ frontend:
             enumLabels: [Auto, Daily, Weekly, Monthly, Quarterly, Yearly]
             ui:
               widget: select
-
+      min_px_w: 320
+      min_px_h: 220
+      help:
+        what: "Cases starting and finishing over time."
+        read: "When arrivals persistently exceed completions the process is accumulating work in progress."
+        computed: "Bucketed by the chosen granularity over the filtered log."
     - id: active-cases
       entry: ./widgets/ActiveCases.tsx
       title: Active cases (WIP)
       description: Open cases (started but not finished) at the end of each period.
       icon: Activity
-      default_w: 6
+      default_w: 3
       default_h: 7
-      min_w: 5
+      min_w: 3
       min_h: 7
       config_schema:
         properties:
@@ -84,15 +96,20 @@ frontend:
             enumLabels: [Auto, Daily, Weekly, Monthly, Quarterly, Yearly]
             ui:
               widget: select
-
+      min_px_w: 300
+      min_px_h: 200
+      help:
+        what: "How many cases are open at each point in time."
+        read: "A rising line means work is arriving faster than it clears. Steady means arrivals and completions are balanced."
+        computed: "A case counts as active between its first and last event."
     - id: activity-mix
       entry: ./widgets/ActivityMix.tsx
       title: Activity mix over time
       description: Stacked event volume per activity per period - which activities dominate when.
       icon: Layers
-      default_w: 8
+      default_w: 4
       default_h: 7
-      min_w: 6
+      min_w: 3
       min_h: 7
       config_schema:
         properties:
@@ -114,15 +131,20 @@ frontend:
             default: 8
             ui:
               widget: slider
-
+      min_px_w: 320
+      min_px_h: 240
+      help:
+        what: "How the balance of activities changes over time."
+        read: "A band that grows or vanishes marks a change in how the process is actually run — often a process change, sometimes a recording change."
+        computed: "Share of events per activity per period, top N by total volume."
     - id: dotted-chart
       entry: ./widgets/DottedChart.tsx
       title: Dotted chart
       description: One dot per event - x = time, y = case (ordered by start), colour = activity.
       icon: ScatterChart
-      default_w: 8
+      default_w: 4
       default_h: 9
-      min_w: 6
+      min_w: 3
       min_h: 8
       config_schema:
         properties:
@@ -136,7 +158,12 @@ frontend:
             default: 8000
             ui:
               widget: slider
-
+      min_px_w: 340
+      min_px_h: 260
+      help:
+        what: "Every event plotted over time — the classic dotted chart."
+        read: "Diagonal bands are cohorts moving through together; vertical stripes are batch processing."
+        computed: "One dot per event, sampled down to the configured maximum for legibility."
 permissions:
   - read:event_log
   - write:module_results

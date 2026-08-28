@@ -24,8 +24,15 @@ _DEFAULTS_SEEDED_KEY = "modules_defaults_seeded"
 OTHER_USER_ID = "00000000-0000-7000-8000-0000000000ff"
 
 
-def _module_zip(module_id: str) -> bytes:
-    """A minimal, valid uploadable module archive declaring *module_id*."""
+def _module_zip(module_id: str, *, body_marker: str = "") -> bytes:
+    """A minimal, valid uploadable module archive declaring *module_id*.
+
+    ``body_marker`` injects a comment into ``module.py`` so callers can produce
+    byte-*different* variants under the *same* id (distinct content hash) to
+    exercise the collision/reject paths. The default (empty) always yields
+    byte-identical content for a given id, so two calls hash the same.
+    """
+    marker = f"    # variant: {body_marker}\n" if body_marker else ""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(
@@ -40,14 +47,45 @@ def _module_zip(module_id: str) -> bytes:
             f"{module_id}/module.py",
             (
                 "from mate.sdk import Module, ModuleContext, route\n\n"
-                f"class TheModule(Module):\n"
-                f'    id = "{module_id}"\n\n'
+                "class TheModule(Module):\n"
+                f'    id = "{module_id}"\n'
+                f"{marker}"
+                "\n"
                 '    @route.get("/ping")\n'
                 "    async def ping(self, ctx: ModuleContext) -> dict[str, str]:\n"
                 '        return {"id": ctx.module_id}\n'
             ),
         )
     return buf.getvalue()
+
+
+async def _add_install_row(user_id: str, module_id: str, source: str = "upload") -> None:
+    """Grant *user_id* ownership of *module_id* (creating the user if needed)."""
+    from mate.api.db.engine import get_sessionmaker
+    from mate.api.db.models import ModuleInstall, User
+
+    sm = get_sessionmaker()
+    async with sm() as s:
+        if await s.get(User, user_id) is None:
+            s.add(User(id=user_id, email=f"{user_id}@mate.local"))
+            await s.flush()
+        if await s.get(ModuleInstall, (user_id, module_id)) is None:
+            s.add(ModuleInstall(user_id=user_id, module_id=module_id, source=source))
+        await s.commit()
+
+
+async def _remove_install_row(user_id: str, module_id: str) -> None:
+    from mate.api.db.engine import get_sessionmaker
+    from mate.api.db.models import ModuleInstall
+
+    sm = get_sessionmaker()
+    async with sm() as s:
+        await s.execute(
+            delete(ModuleInstall).where(
+                ModuleInstall.user_id == user_id, ModuleInstall.module_id == module_id
+            )
+        )
+        await s.commit()
 
 
 async def _reset_user_modules(user_id: str = TEST_USER_ID) -> None:
@@ -243,29 +281,117 @@ async def test_upload_rejects_default_id(
     assert module_py.read_text() == before
 
 
+async def _upload(client: AsyncClient, module_id: str, **zip_kwargs) -> dict:
+    """Upload a module archive and return its settled job body."""
+    resp = await client.post(
+        "/api/v1/modules/install",
+        files={
+            "file": (f"{module_id}.zip", _module_zip(module_id, **zip_kwargs), "application/zip")
+        },
+    )
+    assert resp.status_code == 202
+    return await _await_job(client, resp.json()["job_id"])
+
+
+@pytest.mark.asyncio
+async def test_upload_same_module_shared_across_users(
+    client_with_sample_mod: AsyncClient,
+) -> None:
+    """Two users uploading byte-identical code share one loaded instance; the
+    second uploader gains ownership without a reload. The sameness check compares
+    pristine content hashes, so it is immune to post-install folder mutation (a
+    synthesised ``pyproject.toml`` landing in the loaded folder)."""
+    from mate.api.config import get_settings
+    from mate.api.modules import get_module_loader
+
+    # User A (the test client) uploads and loads the module.
+    body = await _upload(client_with_sample_mod, "shared_mod")
+    assert body["status"] == "completed", body
+
+    loader = get_module_loader()
+    assert "shared_mod" in loader.loaded
+    instance_before = loader.loaded["shared_mod"].instance
+
+    # Simulate install-time mutation: a synthesised pyproject.toml lands in the
+    # loaded folder. The pristine sidecar must keep this out of the comparison.
+    target = get_settings().uploaded_modules_dir / "shared_mod"
+    (target / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+
+    # Hand the module to OTHER as its sole owner; the client (user B) doesn't own it.
+    await _remove_install_row(TEST_USER_ID, "shared_mod")
+    await _add_install_row(OTHER_USER_ID, "shared_mod")
+
+    # User B uploads the byte-identical module → reuse (not reject, not reload).
+    body = await _upload(client_with_sample_mod, "shared_mod")
+    assert body["status"] == "completed", body
+
+    # Both own it; the loaded instance was reused, not re-instantiated.
+    assert await _install_row_source(OTHER_USER_ID, "shared_mod") == "upload"
+    assert await _install_row_source(TEST_USER_ID, "shared_mod") == "upload"
+    assert loader.loaded["shared_mod"].instance is instance_before
+
+
 @pytest.mark.asyncio
 async def test_upload_rejects_other_users_id(
     client_with_sample_mod: AsyncClient,
 ) -> None:
-    """An upload whose id is already owned by another user must fail."""
+    """An upload whose id is owned by another user but whose *code differs* must
+    fail - shared in-process code can't diverge under one id."""
+    from mate.api.modules import get_module_loader
+
+    # A real, loaded install; then hand sole ownership to OTHER.
+    assert (await _upload(client_with_sample_mod, "foreign_mod"))["status"] == "completed"
+    assert "foreign_mod" in get_module_loader().loaded
+    await _remove_install_row(TEST_USER_ID, "foreign_mod")
+    await _add_install_row(OTHER_USER_ID, "foreign_mod")
+
+    # User B uploads DIFFERENT code under the same id → reject.
+    body = await _upload(client_with_sample_mod, "foreign_mod", body_marker="divergent")
+    assert body["status"] == "failed", body
+    msg = ((body.get("message") or "") + (body.get("error") or "")).lower()
+    assert "different module" in msg or "rename" in msg
+
+
+@pytest.mark.asyncio
+async def test_upload_coowned_blocks_code_change(
+    client_with_sample_mod: AsyncClient,
+) -> None:
+    """Once an id is co-owned, even the original owner can't change its code."""
+    assert (await _upload(client_with_sample_mod, "co_mod"))["status"] == "completed"
+    # A second user co-owns the identical code (as if they uploaded it too).
+    await _add_install_row(OTHER_USER_ID, "co_mod")
+
+    # The original owner (the client) tries to push a different version → reject.
+    body = await _upload(client_with_sample_mod, "co_mod", body_marker="v2")
+    assert body["status"] == "failed", body
+    msg = ((body.get("message") or "") + (body.get("error") or "")).lower()
+    assert "uninstall" in msg or "rename" in msg
+
+
+@pytest.mark.asyncio
+async def test_uninstall_coowned_keeps_shared_module(
+    client_with_sample_mod: AsyncClient,
+) -> None:
+    """Uninstalling one of two owners leaves the shared code on disk + loaded -
+    reuse grants a *real* ownership row that reference-counts the artifact."""
+    from mate.api.config import get_settings
     from mate.api.db.engine import get_sessionmaker
-    from mate.api.db.models import ModuleInstall, User
+    from mate.api.modules import get_module_loader
+    from mate.api.modules.installs import owner_count
+
+    assert (await _upload(client_with_sample_mod, "gc_mod"))["status"] == "completed"
+    await _add_install_row(OTHER_USER_ID, "gc_mod")
+
+    loader = get_module_loader()
+    target = get_settings().uploaded_modules_dir / "gc_mod"
+    assert target.exists() and "gc_mod" in loader.loaded
+
+    # The client (one of two owners) uninstalls → the shared artifact survives.
+    resp = await client_with_sample_mod.delete("/api/v1/modules/gc_mod")
+    assert resp.status_code == 204
 
     sm = get_sessionmaker()
     async with sm() as s:
-        if await s.get(User, OTHER_USER_ID) is None:
-            s.add(User(id=OTHER_USER_ID, email="other@mate.local"))
-            await s.flush()
-        if await s.get(ModuleInstall, (OTHER_USER_ID, "foreign_mod")) is None:
-            s.add(ModuleInstall(user_id=OTHER_USER_ID, module_id="foreign_mod", source="upload"))
-        await s.commit()
-
-    resp = await client_with_sample_mod.post(
-        "/api/v1/modules/install",
-        files={"file": ("foreign_mod.zip", _module_zip("foreign_mod"), "application/zip")},
-    )
-    assert resp.status_code == 202
-    body = await _await_job(client_with_sample_mod, resp.json()["job_id"])
-    assert body["status"] == "failed", body
-    msg = ((body.get("message") or "") + (body.get("error") or "")).lower()
-    assert "another user" in msg or "in use" in msg
+        assert await owner_count(s, "gc_mod") == 1
+    assert target.exists(), "co-owned module wrongly torn down"
+    assert "gc_mod" in loader.loaded

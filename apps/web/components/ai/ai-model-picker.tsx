@@ -74,6 +74,8 @@ interface AiModelPickerProps {
    * `AiModelSelection.dimensions`. Leave blank to use the model's native dim.
    */
   showDimensions?: boolean;
+  /** When true the whole picker is read-only (admin-locked ai card). */
+  disabled?: boolean;
 }
 
 export function AiModelPicker({
@@ -84,6 +86,7 @@ export function AiModelPicker({
   allowProviders = ALL_PROVIDERS,
   preferEmbeddingModels = false,
   showDimensions = false,
+  disabled = false,
 }: AiModelPickerProps) {
   const { data: aiCfg } = useAiConfig();
   const fetchModels = useFetchProviderModels();
@@ -160,6 +163,7 @@ export function AiModelPicker({
             onValueChange={(v) =>
               onPickProvider(v === "__none" ? null : (v as AiProvider))
             }
+            disabled={disabled}
           >
             <SelectTrigger className="text-xs">
               <SelectValue placeholder="Choose a provider" />
@@ -188,8 +192,8 @@ export function AiModelPicker({
               <button
                 type="button"
                 onClick={() => onRefreshModels(value.provider!)}
-                disabled={fetchingProvider === value.provider}
-                className="cursor-pointer text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1 disabled:opacity-50"
+                disabled={disabled || fetchingProvider === value.provider}
+                className="cursor-pointer text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {fetchingProvider === value.provider ? (
                   <Loader2 className="h-3 w-3 animate-spin" />
@@ -205,7 +209,7 @@ export function AiModelPicker({
             onValueChange={(v) =>
               onChange({ ...value, model: v === "__none" ? null : v })
             }
-            disabled={!value.provider || !configured.has(value.provider)}
+            disabled={disabled || !value.provider || !configured.has(value.provider)}
           >
             <SelectTrigger className="text-xs">
               <SelectValue
@@ -253,6 +257,7 @@ export function AiModelPicker({
               onChange={(e) => onDimensionsChange(e.target.value)}
               placeholder="Native (leave blank)"
               className="h-8 w-40 text-xs"
+              disabled={disabled}
             />
             <div className="flex flex-wrap gap-1">
               {DIMENSION_PRESETS.map((d) => {
@@ -261,12 +266,13 @@ export function AiModelPicker({
                   <button
                     key={d}
                     type="button"
+                    disabled={disabled}
                     onClick={() => onChange({ ...value, dimensions: d })}
                     className={
-                      "cursor-pointer rounded-md border px-2 py-0.5 text-[11px] transition-colors " +
+                      "rounded-md border px-2 py-0.5 text-[11px] transition-colors disabled:cursor-not-allowed disabled:opacity-50 " +
                       (active
                         ? "border-foreground bg-foreground text-background"
-                        : "border-border bg-muted/40 text-muted-foreground hover:text-foreground")
+                        : "cursor-pointer border-border bg-muted/40 text-muted-foreground hover:text-foreground")
                     }
                   >
                     {d}
@@ -276,8 +282,9 @@ export function AiModelPicker({
               {value.dimensions !== null && value.dimensions !== undefined && (
                 <button
                   type="button"
+                  disabled={disabled}
                   onClick={() => onChange({ ...value, dimensions: null })}
-                  className="cursor-pointer rounded-md border border-border bg-muted/40 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
+                  className="cursor-pointer rounded-md border border-border bg-muted/40 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Clear
                 </button>

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import shutil
@@ -10,10 +11,8 @@ import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
-from urllib.parse import unquote, urlparse
 
 import aiofiles
-import httpx
 import structlog
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, HttpUrl
@@ -26,12 +25,15 @@ from mate.api.auth import (
 )
 from mate.api.db.models import EventLog
 from mate.api.db.session import SessionDep
+from mate.api.ingest import staging
+from mate.api.ingest.compression import decompressed
 from mate.api.ingest.detect import (
     detect_format,
     original_extension,
     sniff_format,
 )
 from mate.api.ingest.dispatch import IMPORT_JOB_TYPE
+from mate.api.ingest.probe import probe_staged
 from mate.api.ingest.storage import log_paths
 from mate.api.jobs.runtime import JobRuntime, get_job_runtime
 from mate.api.schemas.event_logs import (
@@ -42,11 +44,18 @@ from mate.api.schemas.event_logs import (
     EventLogUpdate,
     JsonColumnMapping,
     JsonProbeResponse,
+    LogProbeResponse,
+    ProbeColumn,
     RemapColumnRoles,
     XmlColumnMapping,
     XmlProbeResponse,
 )
-from mate.api.storage import sync as storage_sync
+
+# The from-url / reimport / remap / duplicate / delete bodies live in the
+# service layer so the MCP toolset can reuse them; these routes are thin
+# adapters over it.
+from mate.api.services import log_aggregates
+from mate.api.storage.quota import over_quota_sync
 from mate.api.uuid7 import uuid7_str
 
 log = structlog.get_logger(__name__)
@@ -62,6 +71,104 @@ _RuntimeDep = Annotated[JobRuntime, Depends(_runtime_dep)]
 
 
 @router.post(
+    "/stage",
+    response_model=LogProbeResponse,
+)
+async def stage_event_log(
+    user: CurrentUserDep,
+    file: Annotated[
+        UploadFile,
+        File(
+            description="XES, CSV, XML, JSON, or OCEL (.jsonocel/.xmlocel/.sqlite) upload, "
+            "optionally compressed (.gz/.bz2/.xz/.zip)"
+        ),
+    ],
+) -> LogProbeResponse:
+    """Stage an upload and describe its columns for the import wizard.
+
+    The bytes are written once, under `data/staging/{user}/{token}/`, and then
+    sampled: the response carries the source columns with real example values
+    plus the role mapping the import *would* apply (`roles`) and how confident
+    each guess is (`quality`). Nothing is created in the database - the client
+    posts `staging_token` back to `POST /event-logs` to confirm, or walks away
+    and lets the TTL sweep reclaim the bytes.
+    """
+    if file.filename is None:
+        raise HTTPException(status_code=400, detail="Upload is missing a filename.")
+
+    try:
+        coarse_format = detect_format(file.filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=415, detail=str(exc)) from exc
+
+    if await asyncio.to_thread(over_quota_sync):
+        raise HTTPException(
+            status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
+            detail="Storage quota reached. Delete data or have the operator raise "
+            "STORAGE_S3_QUOTA_BYTES.",
+        )
+
+    token = uuid7_str()
+    root = await asyncio.to_thread(staging.create_staging_dir, user.id, token)
+    staged_path = root / f"original.{original_extension(file.filename, coarse_format).lstrip('.')}"
+
+    try:
+        async with aiofiles.open(staged_path, "wb") as out:
+            while chunk := await file.read(1024 * 1024):
+                await out.write(chunk)
+
+        try:
+            source_format, ocel_flavor = await asyncio.to_thread(
+                sniff_format, staged_path, coarse_format, filename=file.filename
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=415, detail=str(exc)) from exc
+
+        try:
+            probe = await asyncio.to_thread(probe_staged, staged_path, source_format)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            log.warning("event_log.probe_failed", format=source_format, error=str(exc))
+            raise HTTPException(
+                status_code=400, detail=f"Could not read the uploaded file: {exc}"
+            ) from exc
+
+        await asyncio.to_thread(
+            staging.write_manifest,
+            root,
+            {
+                "filename": file.filename,
+                "source_format": source_format,
+                "ocel_flavor": ocel_flavor,
+            },
+        )
+    except Exception:
+        # Never leave bytes behind for a staging attempt that failed - the TTL
+        # sweep would eventually get them, but a 415 should cost nothing.
+        await asyncio.to_thread(shutil.rmtree, root, True)
+        raise
+
+    return LogProbeResponse(
+        staging_token=token,
+        source_format=source_format,
+        log_model="object_centric" if probe.log_model == "object_centric" else "case_centric",
+        needs_mapping=probe.needs_mapping,
+        columns=[
+            ProbeColumn(name=c.name, coverage=c.coverage, samples=c.samples) for c in probe.columns
+        ],
+        roles=probe.roles,
+        quality=probe.quality,
+        events_sampled=probe.events_sampled,
+        size_bytes=staged_path.stat().st_size,
+        filename=file.filename,
+        delimiter=probe.delimiter,
+        event_element=probe.event_element,
+        event_path=probe.event_path,
+    )
+
+
+@router.post(
     "",
     response_model=EventLogCreateResponse,
     status_code=status.HTTP_202_ACCEPTED,
@@ -71,24 +178,52 @@ async def create_event_log(
     runtime: _RuntimeDep,
     user: CurrentUserDep,
     file: Annotated[
-        UploadFile,
+        UploadFile | None,
         File(
-            description="XES, XES.GZ, CSV, XML, JSON, or OCEL (.jsonocel/.xmlocel/.sqlite) upload"
+            description="XES, CSV, XML, JSON, or OCEL (.jsonocel/.xmlocel/.sqlite) upload, "
+            "optionally compressed (.gz/.bz2/.xz/.zip). Omit when passing staging_token."
         ),
-    ],
+    ] = None,
+    staging_token: Annotated[
+        str | None,
+        Form(description="Token from POST /event-logs/stage - confirms an already-staged upload"),
+    ] = None,
     name: Annotated[str | None, Form()] = None,
     csv_mapping: Annotated[str | None, Form(description="JSON-encoded CsvColumnMapping")] = None,
     xml_mapping: Annotated[str | None, Form(description="JSON-encoded XmlColumnMapping")] = None,
     json_mapping: Annotated[str | None, Form(description="JSON-encoded JsonColumnMapping")] = None,
+    column_roles: Annotated[
+        str | None,
+        Form(description="JSON-encoded {role: source column} override, from the wizard"),
+    ] = None,
     folder_id: Annotated[str | None, Form()] = None,
 ) -> EventLogCreateResponse:
-    if file.filename is None:
-        raise HTTPException(status_code=400, detail="Upload is missing a filename.")
+    if (file is None) == (staging_token is None):
+        raise HTTPException(
+            status_code=422,
+            detail="Provide either a file upload or a staging_token, not both.",
+        )
 
-    try:
-        coarse_format = detect_format(file.filename)
-    except ValueError as exc:
-        raise HTTPException(status_code=415, detail=str(exc)) from exc
+    staged: staging.StagedUpload | None = None
+    if staging_token is not None:
+        staged = await asyncio.to_thread(staging.resolve_staged, user.id, staging_token)
+        if staged is None:
+            raise HTTPException(
+                status_code=404,
+                detail="This upload is no longer staged - it expired or was already imported. "
+                "Choose the file again.",
+            )
+        source_filename = staged.filename
+        coarse_format = staged.source_format or "csv"
+    else:
+        assert file is not None  # narrowed by the XOR check above
+        if file.filename is None:
+            raise HTTPException(status_code=400, detail="Upload is missing a filename.")
+        source_filename = file.filename
+        try:
+            coarse_format = detect_format(file.filename)
+        except ValueError as exc:
+            raise HTTPException(status_code=415, detail=str(exc)) from exc
 
     parsed_mapping: CsvColumnMapping | None = None
     if csv_mapping:
@@ -111,27 +246,67 @@ async def create_event_log(
         except (ValueError, json.JSONDecodeError) as exc:
             raise HTTPException(status_code=422, detail=f"Invalid json_mapping: {exc}") from exc
 
+    parsed_roles: dict[str, str] | None = None
+    if column_roles:
+        try:
+            loaded = json.loads(column_roles)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=422, detail=f"Invalid column_roles: {exc}") from exc
+        if not isinstance(loaded, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in loaded.items()
+        ):
+            raise HTTPException(
+                status_code=422, detail="column_roles must be an object of role → column strings."
+            )
+        parsed_roles = {k: v for k, v in loaded.items() if v} or None
+
     if folder_id is not None:
         await get_owned_folder(session, folder_id, user.id)
+
+    # Reject up-front when the bucket is at its quota (S3 mode + quota set only),
+    # before staging any bytes. A guardrail: an unknown usage never blocks.
+    # (A staged upload already paid this check at /stage time.)
+    if staged is None and await asyncio.to_thread(over_quota_sync):
+        raise HTTPException(
+            status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
+            detail="Storage quota reached. Delete data or have the operator raise "
+            "STORAGE_S3_QUOTA_BYTES.",
+        )
 
     log_id = uuid7_str()
     paths = log_paths(log_id, user.id)
     paths.ensure()
 
-    ext = original_extension(file.filename, coarse_format)
-    original_path = paths.original_for(ext)
+    if staged is not None:
+        # Already on disk and already sniffed at /stage time: move the bytes into
+        # the log directory instead of re-uploading them.
+        original_path = paths.root / staged.file.name
+        await asyncio.to_thread(shutil.move, str(staged.file), str(original_path))
+        await asyncio.to_thread(staged.discard)
+        source_format = staged.source_format
+        ocel_flavor = staged.ocel_flavor
+    else:
+        assert file is not None  # narrowed at the top of the handler
+        ext = original_extension(source_filename, coarse_format)
+        original_path = paths.original_for(ext)
 
-    async with aiofiles.open(original_path, "wb") as out:
-        while chunk := await file.read(1024 * 1024):
-            await out.write(chunk)
+        async with aiofiles.open(original_path, "wb") as out:
+            while chunk := await file.read(1024 * 1024):
+                await out.write(chunk)
 
-    # Refine the coarse extension guess by inspecting the staged file: plain
-    # .json / .xml auto-route to the object-centric (OCEL) or case-centric path.
-    source_format, ocel_flavor = await asyncio.to_thread(
-        sniff_format, original_path, coarse_format, filename=file.filename
-    )
+        # Refine the coarse extension guess by inspecting the staged file: plain
+        # .json / .xml auto-route to the object-centric (OCEL) or case-centric path,
+        # and a bare .zip resolves to its single member's format. ValueError =
+        # empty/ambiguous archive → reject before any DB row exists.
+        try:
+            source_format, ocel_flavor = await asyncio.to_thread(
+                sniff_format, original_path, coarse_format, filename=source_filename
+            )
+        except ValueError as exc:
+            await asyncio.to_thread(paths.remove)
+            raise HTTPException(status_code=415, detail=str(exc)) from exc
 
-    display_name = (name or file.filename).strip() or file.filename
+    display_name = (name or source_filename).strip() or source_filename
 
     session.add(
         EventLog(
@@ -139,7 +314,7 @@ async def create_event_log(
             user_id=user.id,
             name=display_name,
             source_format=source_format,
-            source_filename=file.filename,
+            source_filename=source_filename,
             status="importing",
             folder_id=folder_id,
             created_at=datetime.now(UTC).replace(tzinfo=None),
@@ -160,6 +335,7 @@ async def create_event_log(
             "csv_mapping": parsed_mapping.model_dump() if parsed_mapping else None,
             "xml_mapping": parsed_xml_mapping.model_dump() if parsed_xml_mapping else None,
             "json_mapping": parsed_json_mapping.model_dump() if parsed_json_mapping else None,
+            "column_roles": parsed_roles,
         },
     )
 
@@ -192,112 +368,15 @@ async def create_event_log_from_url(
     user: CurrentUserDep,
 ) -> EventLogCreateResponse:
     """Download a remote XES / XES.GZ / CSV / XML / JSON / OCEL and queue it."""
-    url_str = str(body.url)
-    # Derive a filename from the URL path so detect_format can sniff the extension.
-    url_path = unquote(urlparse(url_str).path)
-    filename = url_path.rsplit("/", 1)[-1] or "import"
-
-    try:
-        coarse_format = detect_format(filename)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=415,
-            detail=f"Cannot determine file format from URL path ({filename!r}). "
-            "Make sure the URL ends with .xes, .xes.gz, .csv, .xml, .json, or an OCEL extension.",
-        ) from exc
-
-    parsed_mapping: CsvColumnMapping | None = None
-    if body.csv_mapping:
-        try:
-            parsed_mapping = CsvColumnMapping.model_validate(json.loads(body.csv_mapping))
-        except (ValueError, json.JSONDecodeError) as exc:
-            raise HTTPException(status_code=422, detail=f"Invalid csv_mapping: {exc}") from exc
-
-    parsed_xml_mapping: XmlColumnMapping | None = None
-    if body.xml_mapping:
-        try:
-            parsed_xml_mapping = XmlColumnMapping.model_validate(json.loads(body.xml_mapping))
-        except (ValueError, json.JSONDecodeError) as exc:
-            raise HTTPException(status_code=422, detail=f"Invalid xml_mapping: {exc}") from exc
-
-    parsed_json_mapping: JsonColumnMapping | None = None
-    if body.json_mapping:
-        try:
-            parsed_json_mapping = JsonColumnMapping.model_validate(json.loads(body.json_mapping))
-        except (ValueError, json.JSONDecodeError) as exc:
-            raise HTTPException(status_code=422, detail=f"Invalid json_mapping: {exc}") from exc
-
-    # Download the remote file.
-    try:
-        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
-            resp = await client.get(url_str)
-            if resp.status_code >= 400:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Remote server returned HTTP {resp.status_code} for the given URL.",
-                )
-            raw = resp.content
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to fetch URL: {exc}") from exc
-
-    log_id = uuid7_str()
-    paths = log_paths(log_id, user.id)
-    paths.ensure()
-
-    ext = original_extension(filename, coarse_format)
-    original_path = paths.original_for(ext)
-
-    async with aiofiles.open(original_path, "wb") as out:
-        await out.write(raw)
-
-    # Refine the coarse guess from the downloaded content (OCEL vs case-centric).
-    source_format, ocel_flavor = await asyncio.to_thread(
-        sniff_format, original_path, coarse_format, filename=filename
-    )
-
-    display_name = (body.name or filename).strip() or filename
-    # Strip the extension from auto-derived names to keep things clean.
-    if not body.name:
-        for suffix in (".xes.gz", ".xes", ".csv", ".xml", ".json", ".jsonocel", ".xmlocel"):
-            if display_name.lower().endswith(suffix):
-                display_name = display_name[: -len(suffix)]
-                break
-
-    session.add(
-        EventLog(
-            id=log_id,
-            user_id=user.id,
-            name=display_name,
-            source_format=source_format,
-            source_filename=filename,
-            status="importing",
-            created_at=datetime.now(UTC).replace(tzinfo=None),
-        )
-    )
-    await session.commit()
-
-    job_id = await runtime.submit(
-        type_=IMPORT_JOB_TYPE,
-        user_id=user.id,
-        title=f"Import - {display_name}",
-        subtitle=f"event_log.import · {source_format} (url)",
-        payload={
-            "log_id": log_id,
-            "source_format": source_format,
-            "ocel_flavor": ocel_flavor,
-            "original_path": str(original_path),
-            "csv_mapping": parsed_mapping.model_dump() if parsed_mapping else None,
-            "xml_mapping": parsed_xml_mapping.model_dump() if parsed_xml_mapping else None,
-            "json_mapping": parsed_json_mapping.model_dump() if parsed_json_mapping else None,
-        },
-    )
-
-    log.info(
-        "event_log.created_from_url",
-        log_id=log_id,
-        job_id=job_id,
-        source_format=source_format,
-        url=url_str,
+    log_id, job_id = await log_aggregates.import_log_from_url(
+        session,
+        runtime,
+        user.id,
+        url=str(body.url),
+        name=body.name,
+        csv_mapping=body.csv_mapping,
+        xml_mapping=body.xml_mapping,
+        json_mapping=body.json_mapping,
     )
     return EventLogCreateResponse(log_id=log_id, job_id=job_id)
 
@@ -319,11 +398,16 @@ async def probe_xml_upload(
             while chunk := await file.read(1024 * 1024):
                 await out.write(chunk)
         # Avoid the late import of xml_parser at module-load time - lxml's
-        # iterparse is sync and CPU-bound, so this runs in a thread.
+        # iterparse is sync and CPU-bound, so this runs in a thread. The probe
+        # accepts compressed uploads (gz/bz2/xz/zip) - same contract as import.
         from mate.api.ingest.xml_parser import autodetect_mapping, probe_xml
 
+        def _probe_plain(p: Path) -> dict[str, Any]:
+            with decompressed(p) as plain:
+                return probe_xml(plain)
+
         try:
-            probe = await asyncio.to_thread(probe_xml, tmp_path)
+            probe = await asyncio.to_thread(_probe_plain, tmp_path)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Could not parse XML file: {exc}") from exc
         # XES- and OCEL-shaped probes ship without fields - they're handled by
@@ -340,10 +424,8 @@ async def probe_xml_upload(
             auto_mapping=mapping,
         )
     finally:
-        try:
+        with contextlib.suppress(OSError):
             tmp_path.unlink()
-        except OSError:
-            pass
 
 
 @router.post("/probe-json", response_model=JsonProbeResponse)
@@ -362,8 +444,12 @@ async def probe_json_upload(
                 await out.write(chunk)
         from mate.api.ingest.json_parser import autodetect_mapping, probe_json
 
+        def _probe_plain(p: Path) -> dict[str, Any]:
+            with decompressed(p) as plain:
+                return probe_json(plain)
+
         try:
-            probe = await asyncio.to_thread(probe_json, tmp_path)
+            probe = await asyncio.to_thread(_probe_plain, tmp_path)
         except Exception as exc:
             raise HTTPException(
                 status_code=400, detail=f"Could not parse JSON file: {exc}"
@@ -378,10 +464,8 @@ async def probe_json_upload(
             auto_mapping=mapping,
         )
     finally:
-        try:
+        with contextlib.suppress(OSError):
             tmp_path.unlink()
-        except OSError:
-            pass
 
 
 @router.get("", response_model=list[EventLogSummary])
@@ -419,22 +503,7 @@ async def delete_event_log(
     user: CurrentUserDep,
 ) -> None:
     row = await get_owned_event_log(session, log_id, user.id)
-    # Terminate active jobs (import / re-import / module runs) before tearing
-    # down the row + on-disk data so workers don't keep writing to a directory
-    # we're about to rmtree.
-    cancelled = await runtime.cancel_for_logs([log_id])
-    if cancelled:
-        log.info("event_log.jobs_cancelled", log_id=log_id, count=cancelled)
-    row.deleted_at = datetime.now(UTC).replace(tzinfo=None)
-    await session.commit()
-    paths = log_paths(log_id, user.id)
-    if paths.exists():
-        try:
-            shutil.rmtree(paths.root)
-        except OSError as exc:
-            log.warning("event_log.cleanup_failed", log_id=log_id, error=str(exc))
-    # Remove the mirrored copy from the S3 primary store too (no-op in local mode).
-    await storage_sync.delete_log(user.id, log_id)
+    await log_aggregates.delete_log_and_data(session, runtime, row, user.id)
 
 
 @router.patch("/{log_id}", response_model=EventLogDetail)
@@ -488,81 +557,7 @@ async def reimport_event_log(
     `meta.json` so column-mapped CSVs don't need to be re-mapped.
     """
     row = await get_owned_event_log(session, log_id, user.id)
-    if row.status == "importing":
-        raise HTTPException(status_code=409, detail="Import already in progress.")
-    if not row.source_format:
-        raise HTTPException(
-            status_code=409, detail="No source format on record - cannot re-run import."
-        )
-
-    paths = log_paths(log_id, user.id)
-    # The retained upload may live only in the S3 bucket on a cold cache - pull
-    # the log dir back before locating it (no-op in local mode).
-    await storage_sync.hydrate_log(user.id, log_id)
-    # OCEL stores its upload under the real suffix (jsonocel/xmlocel/sqlite), not
-    # original.ocel - locate by glob so re-import works for every format.
-    original_path = paths.original_for(row.source_format)
-    if not original_path.exists():
-        located = paths.find_original()
-        if located is None:
-            raise HTTPException(
-                status_code=409,
-                detail="Original upload is missing on disk - cannot re-run import.",
-            )
-        original_path = located
-
-    saved_mapping: dict[str, Any] | None = None
-    # OCEL reader flavor is content-detected at first import; recover it from
-    # meta so re-import picks the same pm4py reader (the .json/.xml suffix alone
-    # is not enough to distinguish OCEL json from OCEL xml).
-    ocel_flavor: str | None = None
-    if paths.meta.exists():
-        try:
-            meta = json.loads(paths.meta.read_text())
-            if isinstance(meta, dict):
-                mapping = meta.get("mapping")
-                saved_mapping = mapping if isinstance(mapping, dict) else None
-                flavor = meta.get("ocel_flavor")
-                ocel_flavor = flavor if isinstance(flavor, str) else None
-        except (OSError, json.JSONDecodeError):
-            saved_mapping = None
-
-    csv_mapping_data = saved_mapping if row.source_format == "csv" else None
-    xml_mapping_data = saved_mapping if row.source_format == "xml" else None
-    json_mapping_data = saved_mapping if row.source_format == "json" else None
-
-    # Reset derived state so the listing reflects "importing" while the worker
-    # rebuilds events.parquet / cases.parquet / meta.json.
-    row.status = "importing"
-    row.error = None
-    row.events_count = None
-    row.cases_count = None
-    row.variants_count = None
-    row.objects_count = None
-    row.object_types_count = None
-    row.relations_count = None
-    row.date_min = None
-    row.date_max = None
-    row.detected_schema = None
-    row.imported_at = None
-    await session.commit()
-
-    job_id = await runtime.submit(
-        type_=IMPORT_JOB_TYPE,
-        user_id=user.id,
-        title=f"Re-import - {row.name}",
-        subtitle=f"event_log.import · {row.source_format}",
-        payload={
-            "log_id": log_id,
-            "source_format": row.source_format,
-            "ocel_flavor": ocel_flavor,
-            "original_path": str(original_path),
-            "csv_mapping": csv_mapping_data,
-            "xml_mapping": xml_mapping_data,
-            "json_mapping": json_mapping_data,
-        },
-    )
-    log.info("event_log.reimport_started", log_id=log_id, job_id=job_id)
+    job_id = await log_aggregates.reimport_log(session, runtime, row, user.id)
     return EventLogCreateResponse(log_id=log_id, job_id=job_id)
 
 
@@ -584,67 +579,7 @@ async def remap_event_log(
     columns and the importer rebuilds everything from scratch.
     """
     row = await get_owned_event_log(session, log_id, user.id)
-    if row.log_model == "object_centric":
-        raise HTTPException(
-            status_code=409,
-            detail="Column-role remapping does not apply to object-centric (OCEL) logs.",
-        )
-    if row.status == "importing":
-        raise HTTPException(status_code=409, detail="Import already in progress.")
-    if not row.source_format:
-        raise HTTPException(status_code=409, detail="No source format on record - cannot re-map.")
-
-    paths = log_paths(log_id, user.id)
-    # Pull the retained upload back from S3 if the local cache is cold.
-    await storage_sync.hydrate_log(user.id, log_id)
-    original_path = paths.original_for(row.source_format)
-    if not original_path.exists():
-        raise HTTPException(
-            status_code=409, detail="Original upload is missing on disk - cannot re-map."
-        )
-
-    roles = body.as_roles()
-    # Validate the chosen source columns against what the importer last saw, when
-    # we have that on record - a stale/typo'd column name would otherwise just
-    # silently fall through to autodetect.
-    schema = row.detected_schema if isinstance(row.detected_schema, dict) else {}
-    known = schema.get("source_columns") or schema.get("columns")
-    if isinstance(known, list) and known:
-        unknown = sorted({c for c in roles.values() if c not in known})
-        if unknown:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Unknown column(s) for this log: {', '.join(unknown)}.",
-            )
-
-    row.status = "importing"
-    row.error = None
-    row.events_count = None
-    row.cases_count = None
-    row.variants_count = None
-    row.date_min = None
-    row.date_max = None
-    await session.commit()
-
-    # The explicit `column_roles` override is authoritative - applied centrally
-    # in dispatch over the freshly re-parsed columns - so we deliberately don't
-    # pass the previous csv/xml mapping (which would re-trigger the parser's own
-    # rename and fight the override).
-    job_id = await runtime.submit(
-        type_=IMPORT_JOB_TYPE,
-        user_id=user.id,
-        title=f"Re-map - {row.name}",
-        subtitle=f"event_log.import · {row.source_format}",
-        payload={
-            "log_id": log_id,
-            "source_format": row.source_format,
-            "original_path": str(original_path),
-            "csv_mapping": None,
-            "xml_mapping": None,
-            "column_roles": roles,
-        },
-    )
-    log.info("event_log.remap_started", log_id=log_id, job_id=job_id, roles=roles)
+    job_id = await log_aggregates.remap_log(session, runtime, row, user.id, body.as_roles())
     return EventLogCreateResponse(log_id=log_id, job_id=job_id)
 
 
@@ -663,58 +598,5 @@ async def duplicate_event_log(
     in the same folder, immediately after the source log.
     """
     src = await get_owned_event_log(session, log_id, user.id)
-    if src.status != "ready":
-        raise HTTPException(
-            status_code=409,
-            detail="Only ready event logs can be duplicated.",
-        )
-
-    src_paths = log_paths(log_id, user.id)
-    # On a cold S3 cache the bytes live only in the bucket - pull them first.
-    await storage_sync.hydrate_log(user.id, log_id)
-    if not src_paths.exists():
-        raise HTTPException(
-            status_code=409,
-            detail="Source data is missing on disk - cannot duplicate.",
-        )
-
-    new_id = uuid7_str()
-    new_paths = log_paths(new_id, user.id)
-    try:
-        shutil.copytree(src_paths.root, new_paths.root)
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"Copy failed: {exc}") from exc
-
-    # Sit the duplicate right after the source within the same folder.
-    now = datetime.now(UTC).replace(tzinfo=None)
-    duplicate = EventLog(
-        id=new_id,
-        user_id=user.id,
-        name=f"{src.name} (copy)",
-        source_format=src.source_format,
-        source_filename=src.source_filename,
-        log_model=src.log_model,
-        status="ready",
-        events_count=src.events_count,
-        cases_count=src.cases_count,
-        variants_count=src.variants_count,
-        objects_count=src.objects_count,
-        object_types_count=src.object_types_count,
-        relations_count=src.relations_count,
-        date_min=src.date_min,
-        date_max=src.date_max,
-        detected_schema=src.detected_schema,
-        description=src.description,
-        column_overrides=src.column_overrides,
-        active_filter=src.active_filter,
-        folder_id=src.folder_id,
-        position=src.position + 1,
-        created_at=now,
-        imported_at=now,
-    )
-    session.add(duplicate)
-    await session.commit()
-    # Mirror the cloned dir to the S3 primary store (no-op in local mode).
-    await storage_sync.persist_log(user.id, new_id)
-    log.info("event_log.duplicated", source_log_id=log_id, new_log_id=new_id)
+    duplicate = await log_aggregates.duplicate_log(session, src, user.id)
     return EventLogDetail.model_validate(duplicate)

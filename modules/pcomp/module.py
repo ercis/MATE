@@ -1,12 +1,35 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
 from pydantic import BaseModel
 
 from mate.sdk import Module, ModuleContext, job, route
+
+
+def _cached_test_keys(cache: Any, prefix: str) -> list[str]:
+    """Cache keys matching ``{prefix}__{other_log_id}``, newest first.
+
+    The SDK cache Protocol has no list API, but the platform's ``ResultCache``
+    exposes its directory - the same duck-typed peek the performance module
+    uses for its freshness check. Returns ``[]`` when the cache doesn't expose
+    a directory (e.g. a stub or an unbound cache).
+    """
+    root = getattr(cache, "dir", None)
+    if root is None:
+        return []
+    try:
+        candidates = sorted(
+            Path(root).glob(f"{prefix}__*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        return []
+    return [p.stem for p in candidates]
 
 
 def _to_pcomp_df(df: Any) -> Any:
@@ -40,9 +63,42 @@ class BootstrapTestRequest(BaseModel):
 class PcompModule(Module):
     id = "pcomp"
 
-    async def _load_pair(
-        self, ctx: ModuleContext, other_log_id: str
-    ) -> tuple[Any, Any]:
+    guidance_system_prompt = (
+        "You are a process-mining analyst interpreting statistical "
+        "log-comparison tests: permutation and bootstrap tests on the Earth "
+        "Mover's Distance between two event logs. A small p-value "
+        "(conventionally < 0.05) means the logs differ significantly; a large "
+        "one means no significant difference was detected. Always name the "
+        "compared log ids and the test parameters (distribution size, seed, "
+        "resample size) alongside each p-value."
+    )
+    guidance_user_prefix = "Interpret these statistical log-comparison test results:"
+
+    async def guidance_payload(self, ctx: ModuleContext) -> dict[str, Any] | None:
+        """Compact summary of the cached test results for AI guidance.
+
+        Results are cached as ``permutation__{other_log_id}`` /
+        ``bootstrap__{other_log_id}``; the newest few of each are resolved by
+        peeking at the cache directory. Reads only ``ctx.cache`` - never the
+        event log - so it works under the restricted AI/MCP context. Returns
+        ``None`` until at least one test has been run.
+        """
+
+        async def _collect(prefix: str) -> list[dict[str, Any]]:
+            out: list[dict[str, Any]] = []
+            for key in _cached_test_keys(ctx.cache, prefix)[:5]:
+                cached = await ctx.cache.get(key)
+                if isinstance(cached, dict):
+                    out.append(cached)
+            return out
+
+        permutation = await _collect("permutation")
+        bootstrap = await _collect("bootstrap")
+        if not permutation and not bootstrap:
+            return None
+        return {"permutation_tests": permutation, "bootstrap_tests": bootstrap}
+
+    async def _load_pair(self, ctx: ModuleContext, other_log_id: str) -> tuple[Any, Any]:
         async with ctx.event_log as log:
             df_baseline = await log.pandas()
         try:
@@ -151,7 +207,5 @@ class PcompModule(Module):
         prefix = "permutation" if test == "permutation" else "bootstrap"
         cached = await ctx.cache.get(f"{prefix}__{other_log_id}")
         if cached is None:
-            raise HTTPException(
-                status_code=404, detail="No result cached - run the test first."
-            )
+            raise HTTPException(status_code=404, detail="No result cached - run the test first.")
         return cached

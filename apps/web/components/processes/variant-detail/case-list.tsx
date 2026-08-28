@@ -17,18 +17,19 @@ export function CaseList({
   logId,
   cases,
   total,
+  emptyLabel = "No cases recorded for this variant yet.",
 }: {
   logId: string;
-  cases: VariantCase[];
+  cases: (VariantCase & { occurrences?: number })[];
   total: number;
+  emptyLabel?: string;
 }) {
   if (cases.length === 0) {
-    return (
-      <p className="px-4 py-8 text-center text-sm text-muted-foreground">
-        No cases recorded for this variant yet.
-      </p>
-    );
+    return <p className="px-4 py-8 text-center text-sm text-muted-foreground">{emptyLabel}</p>;
   }
+  // The activity-detail page feeds rows with a per-case occurrence count; the
+  // variant page doesn't - the column only renders when the data carries it.
+  const withOccurrences = cases.some((c) => typeof c.occurrences === "number");
   return (
     <>
       <Table>
@@ -39,6 +40,7 @@ export function CaseList({
             <TableHead>End</TableHead>
             <TableHead className="text-right">Duration</TableHead>
             <TableHead className="text-right">Events</TableHead>
+            {withOccurrences && <TableHead className="text-right">Occurrences</TableHead>}
             <TableHead className="w-[120px] text-right" />
           </TableRow>
         </TableHeader>
@@ -58,6 +60,11 @@ export function CaseList({
               <TableCell className="text-right tabular-nums">
                 {formatNumber(c.event_count)}
               </TableCell>
+              {withOccurrences && (
+                <TableCell className="text-right tabular-nums">
+                  {formatNumber(c.occurrences ?? 0)}
+                </TableCell>
+              )}
               <TableCell className="text-right">
                 <Link
                   href={`/processes/${logId}?tab=events&case_id=${encodeURIComponent(c.case_id)}`}

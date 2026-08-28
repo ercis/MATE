@@ -1,14 +1,14 @@
-from typing import Callable, Tuple, Union
+from collections.abc import Callable
 
 import pandas as pd
-from source.extraneous_delays.availability import absolute_unavailability_intervals_within
-from source.extraneous_delays.concurrency_oracle import OverlappingConcurrencyOracle
-from source.extraneous_delays.resource_availability import CalendarResourceAvailability
-from source.extraneous_delays.concurrency_oracle import Configuration as StartTimeConfiguration
-from source.extraneous_delays.event_log import EventLogIDs
-from source.arrival_distribution import get_best_fitting_distribution
 
+from source.arrival_distribution import get_best_fitting_distribution
+from source.extraneous_delays.availability import absolute_unavailability_intervals_within
+from source.extraneous_delays.concurrency_oracle import Configuration as StartTimeConfiguration
+from source.extraneous_delays.concurrency_oracle import OverlappingConcurrencyOracle
 from source.extraneous_delays.config import Configuration, TimerPlacement
+from source.extraneous_delays.event_log import EventLogIDs
+from source.extraneous_delays.resource_availability import CalendarResourceAvailability
 
 
 def compute_naive_extraneous_activity_delays(
@@ -16,7 +16,7 @@ def compute_naive_extraneous_activity_delays(
     config: Configuration,
     should_consider_timer: Callable[[list], bool] = lambda delays: sum(delays) > 0.0,
     experimentation: bool = False,
-) -> Union[dict, pd.DataFrame]:
+) -> dict | pd.DataFrame:
     """
     Compute, for each activity, the distribution of its extraneous delays. I.e., the distribution of the time passed
     since the activity is both enabled and its resource available, and the recorded start of the activity.
@@ -82,7 +82,7 @@ def compute_complex_extraneous_activity_delays(
     config: Configuration,
     should_consider_timer: Callable[[list], bool] = lambda delays: sum(delays) > 0.0,
     experimentation: bool = False,
-) -> Union[dict, pd.DataFrame]:
+) -> dict | pd.DataFrame:
 
     """
     Compute, for each activity, the distribution of its extraneous delays. To compute the extraneous delay of an
@@ -218,7 +218,7 @@ def _get_first_and_last_available(
     ends: list,
     time_gap: pd.Timedelta,
     extrapolate: bool = False,
-) -> Tuple[pd.Timestamp, pd.Timestamp]:
+) -> tuple[pd.Timestamp, pd.Timestamp]:
     """
     Get the first instant from the period [from]-[to] where the resource was available for a [time_gap] amount of time.
 

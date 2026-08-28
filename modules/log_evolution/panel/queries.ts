@@ -88,8 +88,12 @@ export const CHART_COLORS = [
   "#14b8a6",
   "#f59e0b",
   "#8b5cf6",
-  "#ef4444",
-  "#22c55e",
+  // Deuteranopia-safe pair (was red #ef4444 / green #22c55e, which collapse to
+  // the same muddy tan for red-green colour-blind users). Orange→blue in this
+  // order keeps the strongest CVD separation against the neighbouring violet
+  // and grey (validated: worst adjacent ΔE 61 vs 12.7 before).
+  "#ea580c",
+  "#2563eb",
   "#94a3b8", // "Other" tends to land last → muted grey
 ];
 

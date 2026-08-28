@@ -10,10 +10,10 @@ import {
   YAxis,
 } from "recharts";
 
+import {CardShell} from "@/components/dashboards/kit";
 import { formatNumber } from "@/lib/format";
 
 import { useDiscoveryDfg } from "../panel/queries";
-import { CardShell } from "./_kit";
 
 /** Most frequent activities in the discovered process. */
 export default function ActivityFrequency({

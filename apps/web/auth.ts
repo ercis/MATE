@@ -29,6 +29,9 @@ declare module "next-auth" {
     accessToken?: string;
     error?: "RefreshAccessTokenError";
     provider?: string;
+    /** Unix seconds the access token expires at – lets the browser cache the
+     * session (lib/api.ts) instead of hitting /api/auth/session per request. */
+    expiresAt?: number;
     user: {
       id: string;
       /** Keycloak realm roles, surfaced for client-side nav gating. */
@@ -82,6 +85,37 @@ const KEYCLOAK_CLIENT_SECRET = process.env.KEYCLOAK_CLIENT_SECRET ?? "";
 // straight to that IdP. Leave empty to show Keycloak's local login form (also
 // the break-glass path for the admin@flows-funds.local account).
 const KEYCLOAK_IDP_HINT = process.env.KEYCLOAK_IDP_HINT ?? "";
+// Optional internal back-channel base URL for Keycloak, e.g.
+// "http://keycloak:8080/auth/realms/flows-funds". When set, the SERVER-SIDE
+// OIDC calls (discovery, code->token, userinfo, and the refresh in
+// doRefreshAccessToken) go straight to Keycloak over the internal container
+// network instead of hairpinning out to the public HTTPS hostname via the
+// on-box proxy. The browser-facing issuer + authorization endpoint stay on
+// KEYCLOAK_ISSUER (public HTTPS), so the `iss` check and the login redirect are
+// unchanged. This is what lets us drop NODE_TLS_REJECT_UNAUTHORIZED=0 in
+// docker-compose.prod.yml (the cert-name-mismatch workaround on that hop).
+//
+// STAGED ROLLOUT — a wrong URL breaks login even while the TLS bypass is still
+// present, so do NOT remove the bypass in the same step: (1) set
+// KEYCLOAK_INTERNAL_URL + redeploy; (2) verify a full login AND a token refresh
+// succeed; (3) only THEN remove NODE_TLS_REJECT_UNAUTHORIZED. Leave unset for
+// local dev (the dev Keycloak is reached directly, no proxy in between).
+const KEYCLOAK_INTERNAL_URL = process.env.KEYCLOAK_INTERNAL_URL ?? "";
+
+// Public base URL of the deployment (https in prod, http://localhost in dev).
+const AUTH_URL = process.env.AUTH_URL ?? "";
+// Pin whether Auth.js uses `__Secure-`-prefixed, `Secure` cookies to the stable
+// AUTH_URL scheme instead of letting it infer per-request from X-Forwarded-Proto.
+// Behind the uni edge proxy + Caddy that header isn't pinned, so the authorize
+// leg (a `signIn` server action) and the callback leg (`/api/auth/callback/*`)
+// can disagree on the cookie NAME. The OAuth check cookies (PKCE code_verifier,
+// state, nonce) are keyed by their own name (it's the HKDF salt), so a name flip
+// makes the callback derive a different key and jose can't decrypt the verifier
+// it finds — surfacing as `InvalidCheck: pkceCodeVerifier value could not be
+// parsed`, which kills login at the callback even though the opaque session-store
+// cookie (a plain sid, no crypto) keeps existing sessions working. Pinning this
+// makes the two legs agree unconditionally.
+const USE_SECURE_COOKIES = AUTH_URL.startsWith("https://");
 
 // Demo/dev login bypass. When DEMO_MODE is truthy we add a credentials provider
 // ("demo") that signs a fixed demo user in with no form and no Keycloak round
@@ -125,8 +159,14 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
 async function doRefreshAccessToken(token: JWT): Promise<JWT> {
   const refreshToken = token.refreshToken;
   if (!refreshToken) return { ...token, error: "RefreshAccessTokenError" };
+  // Use the internal back-channel when configured (see KEYCLOAK_INTERNAL_URL),
+  // otherwise the public issuer. This is a server-side call, so it follows the
+  // same back-channel as the provider's token endpoint.
+  const tokenUrl = KEYCLOAK_INTERNAL_URL
+    ? `${KEYCLOAK_INTERNAL_URL}/protocol/openid-connect/token`
+    : `${KEYCLOAK_ISSUER}/protocol/openid-connect/token`;
   try {
-    const resp = await fetch(`${KEYCLOAK_ISSUER}/protocol/openid-connect/token`, {
+    const resp = await fetch(tokenUrl, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -159,7 +199,12 @@ async function doRefreshAccessToken(token: JWT): Promise<JWT> {
   }
 }
 
-const SESSION_MAX_AGE = 60 * 60 * 24 * 30; // 30 days, in seconds
+// Cookie/session TTL. The effective ceiling is Keycloak's online-session cap
+// (realm ssoSessionMaxLifespan, currently 24 h) — a 30-day cookie was
+// misleading because the refresh token dies with the SSO session well before
+// then. Keep this equal to ssoSessionMaxLifespan so the cookie can't outlive
+// the ability to refresh.
+const SESSION_MAX_AGE = 60 * 60 * 24; // 24 hours, in seconds
 
 // Option 3: when a server-side store is configured, override how the session
 // JWT is (de)serialized – persist the full token to disk under a random id and
@@ -188,6 +233,18 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       clientId: KEYCLOAK_CLIENT_ID,
       clientSecret: KEYCLOAK_CLIENT_SECRET,
       issuer: KEYCLOAK_ISSUER,
+      // Route the server-side OIDC back-channel over the internal network when
+      // configured (see KEYCLOAK_INTERNAL_URL). `issuer` stays public so the
+      // `iss` check and the discovered authorization_endpoint (used for the
+      // browser redirect) keep using the public hostname; only discovery, the
+      // code->token exchange, and userinfo move onto the internal URL.
+      ...(KEYCLOAK_INTERNAL_URL
+        ? {
+            wellKnown: `${KEYCLOAK_INTERNAL_URL}/.well-known/openid-configuration`,
+            token: `${KEYCLOAK_INTERNAL_URL}/protocol/openid-connect/token`,
+            userinfo: `${KEYCLOAK_INTERNAL_URL}/protocol/openid-connect/userinfo`,
+          }
+        : {}),
       // Forward kc_idp_hint so Keycloak redirects straight to the brokered IdP
       // (no Keycloak login page). Only added when KEYCLOAK_IDP_HINT is set; we
       // re-declare the default OIDC scope here so adding `params` doesn't drop
@@ -213,6 +270,15 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         ]
       : []),
   ],
+  // Self-hosted behind the uni edge proxy + Caddy: trust the forwarded Host so
+  // Auth.js builds callback URLs and cookie flags from AUTH_URL rather than
+  // re-deriving them from each raw request (prod compose didn't set
+  // AUTH_TRUST_HOST; this closes that gap for every environment).
+  trustHost: true,
+  // Deterministic `__Secure-` cookie naming across the authorize + callback legs
+  // (see USE_SECURE_COOKIES) so a non-pinned X-Forwarded-Proto can't flip the
+  // prefix mid-flow and break the PKCE check.
+  useSecureCookies: USE_SECURE_COOKIES,
   session: { strategy: "jwt", maxAge: SESSION_MAX_AGE },
   ...(jwtOverride ? { jwt: jwtOverride } : {}),
   callbacks: {
@@ -247,6 +313,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       session.accessToken = token.accessToken;
       session.error = token.error;
       session.provider = token.provider;
+      session.expiresAt = token.expiresAt;
       if (token.sub) session.user.id = token.sub;
       // The demo sentinel token isn't a JWT, so roles can't be decoded from it –
       // derive them from DEMO_ADMIN instead (mirrors the API's demo_admin flag).

@@ -1,16 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import {
-  Bar,
-  BarChart,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
+import dynamic from "next/dynamic";
 import {
   Activity,
   Briefcase,
@@ -32,9 +23,21 @@ import type {
   UsageInsights,
   UsersInsights,
 } from "@/lib/api-types";
-import { formatNumber } from "@/lib/format";
+import { CountUp } from "@/components/count-up";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatCardsSkeleton, ChartCardSkeleton } from "@/components/skeletons";
+
+// recharts-backed charts live in ./overview-charts; load them in an async chunk
+// so this route's First Load JS stays small. ssr:false because they only render
+// client-side from data fetched in the browser via rawFetch.
+const DayLineChart = dynamic(
+  () => import("./overview-charts").then((m) => m.DayLineChart),
+  { ssr: false, loading: () => <ChartCardSkeleton /> },
+);
+const LabelBarChart = dynamic(
+  () => import("./overview-charts").then((m) => m.LabelBarChart),
+  { ssr: false, loading: () => <ChartCardSkeleton /> },
+);
 
 interface DayCount {
   day: string;
@@ -85,11 +88,6 @@ const RANGES = [
   { value: 90, label: "90 days" },
   { value: 365, label: "12 months" },
 ];
-
-/** "2026-06-17" → "06-17" for compact day-series axis ticks. */
-function shortDay(day: string): string {
-  return day.length >= 10 ? day.slice(5) : day;
-}
 
 /** Seconds → compact "Xh Ym" / "Xm Ys" / "Xs" for the avg-session KPI. */
 function formatDuration(seconds: number): string {
@@ -474,10 +472,10 @@ function UsageSection({ days }: { days: number }) {
 
 function Kpi({ label, value }: { label: string; value: number | string }) {
   return (
-    <div className="rounded-md border border-border bg-card px-3 py-2">
+    <div className="rounded-md border border-white/10 bg-card/70 px-3 py-2 backdrop-blur-md [border-top-color:var(--glass-refraction-top)] supports-[backdrop-filter]:bg-card/60">
       <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className="text-xl font-semibold">
-        {typeof value === "number" ? formatNumber(value) : value}
+      <div className="text-xl font-semibold tabular-nums">
+        {typeof value === "number" ? <CountUp value={value} /> : value}
       </div>
     </div>
   );
@@ -510,76 +508,5 @@ function ChartCard({
         )}
       </CardContent>
     </Card>
-  );
-}
-
-function DayLineChart({
-  data,
-  valueFormat,
-}: {
-  data: DayCount[];
-  valueFormat?: (value: number) => string;
-}) {
-  return (
-    <ResponsiveContainer width="100%" height="100%">
-      <LineChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-        <XAxis
-          dataKey="day"
-          tickFormatter={shortDay}
-          tick={{ fontSize: 10 }}
-          interval="preserveStartEnd"
-          minTickGap={24}
-        />
-        <YAxis
-          tick={{ fontSize: 10 }}
-          allowDecimals={false}
-          width={valueFormat ? 48 : 28}
-          tickFormatter={valueFormat ? (v) => valueFormat(Number(v)) : undefined}
-        />
-        <Tooltip
-          contentStyle={{ fontSize: 12 }}
-          formatter={valueFormat ? (v) => valueFormat(Number(v)) : undefined}
-        />
-        <Line
-          type="monotone"
-          dataKey="count"
-          stroke="currentColor"
-          className="text-primary"
-          dot={false}
-          strokeWidth={2}
-        />
-      </LineChart>
-    </ResponsiveContainer>
-  );
-}
-
-function LabelBarChart({ data, horizontal }: { data: LabelCount[]; horizontal?: boolean }) {
-  if (horizontal) {
-    return (
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} layout="vertical" margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-          <XAxis type="number" tick={{ fontSize: 10 }} allowDecimals={false} />
-          <YAxis
-            type="category"
-            dataKey="label"
-            tick={{ fontSize: 10 }}
-            width={96}
-            interval={0}
-          />
-          <Tooltip contentStyle={{ fontSize: 12 }} cursor={{ fill: "transparent" }} />
-          <Bar dataKey="count" fill="currentColor" className="text-primary" radius={[0, 2, 2, 0]} />
-        </BarChart>
-      </ResponsiveContainer>
-    );
-  }
-  return (
-    <ResponsiveContainer width="100%" height="100%">
-      <BarChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-        <XAxis dataKey="label" tick={{ fontSize: 10 }} interval={0} />
-        <YAxis tick={{ fontSize: 10 }} allowDecimals={false} width={28} />
-        <Tooltip contentStyle={{ fontSize: 12 }} cursor={{ fill: "transparent" }} />
-        <Bar dataKey="count" fill="currentColor" className="text-primary" radius={[2, 2, 0, 0]} />
-      </BarChart>
-    </ResponsiveContainer>
   );
 }

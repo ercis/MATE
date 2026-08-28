@@ -1,20 +1,19 @@
-import os
-import csv
 import copy
+import csv
 import json
-import pytz
+import os
 import subprocess
+from datetime import datetime
+from pathlib import Path
+
+import matplotlib.dates as mdates
 import numpy as np
 import pandas as pd
-import matplotlib.dates as mdates
+import pytz
 import utils.config as cfg
 import utils.utilities as utils
-
-from pathlib import Path
 from matplotlib import pyplot as plt
-from datetime import datetime
 from PIL import Image
-from typing import Union
 
 
 def vdd_draw_drift_map_with_clusters(data, number, exp_path, ts_ticks,
@@ -242,7 +241,7 @@ def vdd_import_minerful_constraints_timeseries_data(path, constraint_type="confi
     https://github.com/yesanton/Process-Drift-Visualization-With-Declare/blob/master/src/data_importers/import_csv.py
     Author: Anton Yeshchenko
     '''
-    csvfile = open(path, 'r')
+    csvfile = open(path)
     csv_reader = csv.reader(csvfile, delimiter=';', quotechar='|')
 
     hea = next(csv_reader, None)
@@ -721,7 +720,7 @@ def get_sudden_bbox_coco(bbox: list, f_bbox: tuple) -> list:
     return bbox
 
 
-def check_image_width(value: Union[int, float], width: Union[int, float]) -> bool:
+def check_image_width(value: int | float, width: int | float) -> bool:
     """Checks if window value lies outside of image.
 
     Args:

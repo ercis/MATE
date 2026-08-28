@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mate.api.ai_config import AiConfigPayload
 from mate.api.ai_guidance import GuidanceError, structured_completion
+from mate.api.schemas.common import utc_isoformat
 
 log = structlog.get_logger(__name__)
 
@@ -131,8 +132,27 @@ PLATFORM_PAGES: list[NavDestination] = [
         kind="page",
         href_template="/modules",
         requires_log=False,
-        keywords=["module", "modules", "install module", "enable module", "plugins", "module"],
-        description="Install, enable/disable and configure analysis modules.",
+        keywords=[
+            "module",
+            "modules",
+            "install module",
+            "enable module",
+            "plugins",
+            "suggest a module",
+            "suggest module",
+            "recommend a module",
+            "recommend module",
+            "which module",
+            "what module",
+            "choose a module",
+            "modul vorschlagen",
+            "welches modul",
+        ],
+        description=(
+            "Install, enable/disable and configure analysis modules. Route here to "
+            "browse or when the user asks to suggest/recommend a module but names no "
+            "specific analysis goal."
+        ),
     ),
     NavDestination(
         id="modules.import",
@@ -140,7 +160,13 @@ PLATFORM_PAGES: list[NavDestination] = [
         kind="page",
         href_template="/modules/import",
         requires_log=False,
-        keywords=["install module", "upload module", "add module", "new module", "modul installieren"],
+        keywords=[
+            "install module",
+            "upload module",
+            "add module",
+            "new module",
+            "modul installieren",
+        ],
         description="Upload/install a new module package.",
     ),
     NavDestination(
@@ -225,6 +251,51 @@ def _derive_keywords(name: str, description: str | None, provides: list[str]) ->
     return out[:20]
 
 
+# The classifier catalogue carries the module's `about` (a 2-4 sentence "what you
+# can do with this" blurb) when present - it's a far stronger routing signal than
+# the terse one-line `description`. Bound it so a wide install stays within the
+# prompt budget.
+_MODULE_ROUTING_TEXT_MAX = 400
+
+
+def module_routing_text(about: str | None, description: str | None, name: str) -> str:
+    """The text a module contributes as routing context for the classifier.
+
+    Prefers the richer manifest ``about`` ("what you can do with this module"),
+    falling back to the terse ``description``, then the name. This is *manifest*
+    metadata only - never event-log data - so it never touches the data wall.
+    """
+    return (about or description or name or "").strip()
+
+
+def module_destination(
+    module_id: str,
+    name: str,
+    *,
+    about: str | None,
+    description: str | None,
+    keywords: list[str] | None,
+    provides: list[str] | None,
+) -> NavDestination:
+    """Build the ``NavDestination`` for one module from its manifest fields.
+
+    Uses ``about``/``description`` as the routing context (both for the classifier
+    catalogue and, when the manifest declares no explicit keywords, for the
+    derived pre-filter keywords). Pure/DB-free so it's unit-testable.
+    """
+    routing_text = module_routing_text(about, description, name)
+    kw = list(keywords or []) or _derive_keywords(name, routing_text, list(provides or []))
+    return NavDestination(
+        id=module_id,
+        label=name,
+        kind="module",
+        href_template="/processes/{log_id}/modules/" + module_id,
+        requires_log=True,
+        keywords=kw,
+        description=routing_text[:_MODULE_ROUTING_TEXT_MAX],
+    )
+
+
 async def build_user_destinations(session: AsyncSession, user_id: str) -> list[NavDestination]:
     """Static pages + the modules this user has installed *and* enabled."""
     dests = list(PLATFORM_PAGES)
@@ -257,16 +328,14 @@ async def build_user_destinations(session: AsyncSession, user_id: str) -> list[N
             continue
         if not enabled_map.get(m.id, m.default_enabled):
             continue
-        keywords = list(m.keywords) or _derive_keywords(m.name, m.description, list(m.provides))
         dests.append(
-            NavDestination(
-                id=m.id,
-                label=m.name,
-                kind="module",
-                href_template="/processes/{log_id}/modules/" + m.id,
-                requires_log=True,
-                keywords=keywords,
-                description=(m.description or m.name)[:300],
+            module_destination(
+                m.id,
+                m.name,
+                about=m.about,
+                description=m.description,
+                keywords=list(m.keywords),
+                provides=list(m.provides),
             )
         )
     return dests
@@ -330,8 +399,8 @@ async def list_user_processes(session: AsyncSession, user_id: str) -> list[Proce
                 variants_count=r.variants_count,
                 objects_count=r.objects_count,
                 object_types_count=r.object_types_count,
-                date_min=r.date_min.isoformat() if r.date_min else None,
-                date_max=r.date_max.isoformat() if r.date_max else None,
+                date_min=utc_isoformat(r.date_min) if r.date_min else None,
+                date_max=utc_isoformat(r.date_max) if r.date_max else None,
             )
         )
     return out
@@ -357,7 +426,7 @@ def match_process(hint: str | None, processes: list[ProcessInfo]) -> ProcessInfo
     # The model sometimes echoes the catalog's framing - strip leading labels.
     for prefix in ("internal id:", "id=", "id:", "name=", "name:"):
         if h.startswith(prefix):
-            h = h[len(prefix):].strip().strip('"')
+            h = h[len(prefix) :].strip().strip('"')
     if not h:
         return None
     for p in processes:  # exact id
@@ -373,6 +442,32 @@ def match_process(hint: str | None, processes: list[ProcessInfo]) -> ProcessInfo
     return None
 
 
+# Below this, a process name is too generic to be recognised inside free text
+# ("P2P", "log") without firing on unrelated words.
+_MIN_PROCESS_MENTION_LEN = 4
+
+
+def names_a_process(message: str, processes: list[ProcessInfo] | None) -> bool:
+    """True when the message plausibly names one of the user's processes.
+
+    Only the classifier can resolve a named process, so the prefilter fast path
+    must stand down whenever one is mentioned - otherwise "show me the
+    performance of the invoice flow" resolves the module against the *current*
+    process, or degrades to the module's config page when there is none. A
+    false positive only costs one classifier call (the same call the slow path
+    would have made anyway), so this errs towards matching.
+    """
+    if not processes:
+        return False
+    m = message.lower()
+    for p in processes:
+        for token in (p.name, p.id):
+            t = token.strip().lower()
+            if len(t) >= _MIN_PROCESS_MENTION_LEN and t in m:
+                return True
+    return False
+
+
 # ── Settings actions (whitelisted, applied client-side on click) ─────────────
 
 # Canonical setting id -> spec. ONLY settings listed here can ever be produced;
@@ -381,12 +476,44 @@ def match_process(hint: str | None, processes: list[ProcessInfo]) -> ProcessInfo
 # onboarding completion, account/email/password, data wipe/export, module
 # install/uninstall - is deliberately ABSENT here and rejected, so the AI can
 # never change it.
-_BOOL_TRUE = {"true", "on", "yes", "enable", "enabled", "1", "mute", "muted",
-              "collapse", "collapsed", "show", "shown"}
-_BOOL_FALSE = {"false", "off", "no", "disable", "disabled", "0", "unmute",
-               "expand", "expanded", "hide", "hidden"}
-_DELIMITER_SYNONYMS = {"comma": ",", ",": ",", "semicolon": ";", ";": ";",
-                       "tab": "\t", "\\t": "\t", "\t": "\t", "pipe": "|", "|": "|"}
+_BOOL_TRUE = {
+    "true",
+    "on",
+    "yes",
+    "enable",
+    "enabled",
+    "1",
+    "mute",
+    "muted",
+    "collapse",
+    "collapsed",
+    "show",
+    "shown",
+}
+_BOOL_FALSE = {
+    "false",
+    "off",
+    "no",
+    "disable",
+    "disabled",
+    "0",
+    "unmute",
+    "expand",
+    "expanded",
+    "hide",
+    "hidden",
+}
+_DELIMITER_SYNONYMS = {
+    "comma": ",",
+    ",": ",",
+    "semicolon": ";",
+    ";": ";",
+    "tab": "\t",
+    "\\t": "\t",
+    "\t": "\t",
+    "pipe": "|",
+    "|": "|",
+}
 
 SETTING_WHITELIST: dict[str, dict[str, Any]] = {
     "theme": {"target": "theme", "kind": "enum", "values": ("light", "dark", "system")},
@@ -650,6 +777,15 @@ Rules:
       -> targets=["discovery"], process="helpdesk"
     Example: "show me the complexity of the Order log"
       -> targets=["complexity"], process="Order log"
+- When the user states an analysis GOAL ("show me a bottleneck", "where does my
+  process lose time", "check if we follow the rules", "suggest a module for drift"),
+  treat it as navigation and pick the single module whose description best matches
+  that goal as the target. Use the destination descriptions below to choose.
+    Example: "show me a bottleneck" -> targets=["performance"]
+    Example: "discover how my process actually runs" -> targets=["discovery"]
+- If the user asks to suggest/recommend a module but names no concrete goal
+  (e.g. "suggest a module", "which module should I use?"), target the "modules"
+  page so they can browse.
 - If the user names a specific process that appears under 'Available processes',
   set "process" to that process's NAME (not the id). Otherwise set "process" to null.
 - If (and only if) the user EXPLICITLY asks to change one of the settings under
@@ -684,7 +820,9 @@ def _coerce_routing(obj: Any, valid_ids: set[str]) -> dict[str, Any]:
             if len(targets) >= 3:
                 break
     raw_process = obj.get("process")
-    process = str(raw_process).strip() if isinstance(raw_process, str) and raw_process.strip() else None
+    process = (
+        str(raw_process).strip() if isinstance(raw_process, str) and raw_process.strip() else None
+    )
     try:
         confidence = float(obj.get("confidence", 0.0))
     except (TypeError, ValueError):
@@ -823,9 +961,10 @@ def current_destination(
         if d.requires_log:
             continue
         href = d.href_template.rstrip("/")
-        if p == href or p.startswith(href + "/"):
-            if best is None or len(href) > len(best.href_template.rstrip("/")):
-                best = d
+        if (p == href or p.startswith(href + "/")) and (
+            best is None or len(href) > len(best.href_template.rstrip("/"))
+        ):
+            best = d
     return best
 
 
@@ -863,10 +1002,10 @@ async def route_intent(
     pf = prefilter(message, destinations)
 
     # Fast path: an explicit navigation verb + exactly one matching destination
-    # is unambiguous, so we navigate without paying for the LLM. (No named-process
-    # resolution here - that needs the classifier; the fast path uses the current
-    # process context only.)
-    if pf.has_cue and len(pf.matches) == 1:
+    # is unambiguous, so we navigate without paying for the LLM. It resolves
+    # against the *current* process only, so a message that names a different
+    # one has to go through the classifier instead.
+    if pf.has_cue and len(pf.matches) == 1 and not names_a_process(message, processes):
         targets = _strip_current(
             resolve_targets("navigate", pf.matches, PREFILTER_CONFIDENCE, destinations, log_id)
         )

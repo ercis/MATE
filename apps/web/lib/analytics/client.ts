@@ -13,7 +13,19 @@ import type { EventName } from "@/lib/analytics/events";
  */
 
 interface QueuedEvent {
-  event_type: "page" | "click" | "custom" | "error" | "perf" | "form";
+  event_type:
+    | "page"
+    | "click"
+    | "custom"
+    | "error"
+    | "perf"
+    | "form"
+    | "input"
+    | "key"
+    | "pointer"
+    | "clipboard"
+    | "drag"
+    | "view";
   event_name: string;
   occurred_at: string;
   path?: string | null;
@@ -43,16 +55,10 @@ let warnedIngestFailure = false;
 let cachedToken: string | null = null;
 
 async function accessToken(): Promise<string | null> {
-  try {
-    const { getSession } = await import("next-auth/react");
-    const session = (await getSession()) as
-      | { accessToken?: string; error?: string }
-      | null;
-    // Don't reuse a token from a session that failed to refresh.
-    cachedToken = session?.error ? null : session?.accessToken ?? null;
-  } catch {
-    // Keep the last known token on a transient failure.
-  }
+  // Shared cached session from lib/api – no per-flush /api/auth/session
+  // roundtrip. Returns undefined for missing/refresh-failed sessions.
+  const { sessionAccessToken } = await import("@/lib/api");
+  cachedToken = (await sessionAccessToken()) ?? null;
   return cachedToken;
 }
 
@@ -195,9 +201,12 @@ export function flushOnUnload(): void {
     return;
   }
   const { sessionId, started } = ensureSession();
+  // keepalive fetches and sendBeacon share a ~64KB in-flight quota; pointer
+  // traces are the bulk of a batch and the least valuable at unload, so drop
+  // them rather than risk the browser silently discarding everything.
   const payload = {
     session: sessionMeta(sessionId, started),
-    events: queue,
+    events: queue.filter((e) => e.event_type !== "pointer"),
   };
   queue = [];
   const body = JSON.stringify(payload);

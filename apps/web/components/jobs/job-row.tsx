@@ -18,7 +18,7 @@ import {
 import { StatusBadge } from "@/components/status-badge";
 import { useCancelJob, useRetryJob } from "@/lib/queries";
 import { formatDuration, formatRelative } from "@/lib/format";
-import { jobProgress } from "@/lib/job-progress";
+import { jobProgress, stageLabel } from "@/lib/job-progress";
 import { jobStallSeconds, parseJobTitle, type LiveJob } from "@/lib/stores/jobs";
 import { cn } from "@/lib/cn";
 
@@ -147,7 +147,7 @@ export function JobRow({ job }: JobRowProps) {
               className={pct === null ? "h-1 animate-pulse" : "h-1"}
             />
             <div className="flex items-center justify-between text-[11px] text-muted-foreground tabular-nums">
-              <span>{label}</span>
+              <span>{job.stage ? `${stageLabel(job.stage)} · ${label}` : label}</span>
               <span>
                 {rate && Number.isFinite(rate)
                   ? `${Math.round(rate).toLocaleString()}/s · ETA ${formatDuration(eta)}`
@@ -207,9 +207,7 @@ function JobDetailsDialog({
                 Status
               </div>
               <p className="text-xs">
-                {job.stage && (
-                  <span className="font-medium uppercase tracking-wide">{job.stage}</span>
-                )}
+                {job.stage && <span className="font-medium">{stageLabel(job.stage)}</span>}
                 {job.stage && job.message && <span className="mx-1">·</span>}
                 {job.message}
               </p>

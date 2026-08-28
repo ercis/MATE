@@ -491,3 +491,44 @@ export const selectJobGroups = (
   standalone.sort((a, b) => (b.created_at < a.created_at ? -1 : 1));
   return { groups, standalone };
 };
+
+/** The import job type whose children are the per-module precompute jobs. */
+const IMPORT_JOB_TYPE = "event_log.import";
+
+/**
+ * Precompute progress for one log: how many of its modules are settled.
+ *
+ * Backs the "Preparing modules N/M" surfaces outside the jobs drawer (the
+ * process detail banner and the processes-list row) so they read the exact same
+ * checklist the drawer renders. Returns `null` when there is no import job for
+ * this log in the store (a page opened long after the import, or a plan-less
+ * older job) - callers fall back to an indeterminate hint.
+ *
+ * Like `selectJobGroups`, this allocates a fresh object every call: subscribe to
+ * the stable `byId` map and run it inside a `useMemo`, never as a `useShallow`
+ * selector.
+ */
+export const precomputeProgressForLog = (
+  byId: Map<string, LiveJob>,
+  logId: string,
+): { done: number; total: number; pct: number } | null => {
+  let parent: LiveJob | null = null;
+  for (const j of byId.values()) {
+    if (j.type !== IMPORT_JOB_TYPE) continue;
+    if ((j.payload_json as { log_id?: string } | null)?.log_id !== logId) continue;
+    // Newest import wins - a re-import supersedes the original run.
+    if (!parent || parent.created_at < j.created_at) parent = j;
+  }
+  if (!parent) return null;
+
+  const children: LiveJob[] = [];
+  for (const j of byId.values()) if (j.parent_job_id === parent.id) children.push(j);
+
+  const steps = buildPrecomputeSteps(parent, children);
+  const total = steps ? steps.length : children.length;
+  if (total === 0) return null;
+  const done = steps
+    ? steps.filter((s) => STEP_DONE.has(s.state)).length
+    : children.filter((c) => FINISHED.has(c.status)).length;
+  return { done, total, pct: Math.round((done / total) * 100) };
+};
