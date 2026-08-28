@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-import { auth, signIn, DEMO_MODE } from "@/auth";
+import { auth, signIn, DEMO_MODE, KEYCLOAK_IDP_HINT } from "@/auth";
 import { ThemeToggleButton } from "@/components/theme-toggle-button";
 import { MateLogo } from "@/components/mate-logo";
 import { BorderBeam } from "@/components/glass/border-beam";
@@ -37,6 +37,12 @@ export default async function LoginPage({
   const startUrl = `/login/start?callbackUrl=${encodeURIComponent(callbackUrl)}${
     staleSession ? "&prompt=login" : ""
   }`;
+  // With a brokered IdP configured, the CTA above jumps straight to it and
+  // Keycloak's own form is unreachable - so accounts that live in the realm
+  // itself (service/test accounts, external collaborators, break-glass admin)
+  // need this second door. `local=1` tells /login/start to drop kc_idp_hint.
+  // Hidden when no IdP is brokered, since the CTA already lands on that form.
+  const localLoginUrl = KEYCLOAK_IDP_HINT ? `${startUrl}&local=1` : null;
 
   return (
     <div className="relative z-10 w-full max-w-sm space-y-6 rounded-2xl border border-white/15 [border-top-color:var(--glass-refraction-top)] bg-card/70 p-8 shadow-xl backdrop-blur-2xl backdrop-saturate-150 supports-[backdrop-filter]:bg-card/60">
@@ -76,6 +82,14 @@ export default async function LoginPage({
             label={staleSession ? "Sign in again" : "Login with university account"}
             pendingLabel="Signing in…"
           />
+          {localLoginUrl ? (
+            <LoginCta
+              href={localLoginUrl}
+              variant="ghost"
+              label="Sign in with a Mate account"
+              pendingLabel="Signing in…"
+            />
+          ) : null}
         </>
       )}
     </div>
