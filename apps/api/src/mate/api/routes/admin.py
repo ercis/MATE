@@ -45,6 +45,7 @@ from mate.api.db.engine import get_sessionmaker
 from mate.api.db.models import AnalyticsEvent, User
 from mate.api.db.session import SessionDep
 from mate.api.routes.analytics import event_to_dict
+from mate.api.schemas.common import UtcDateTime
 
 log = structlog.get_logger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -242,6 +243,11 @@ _XES_HEADER = (
     'uri="http://www.xes-standard.org/time.xesext"/>\n'
     '  <extension name="Lifecycle" prefix="lifecycle" '
     'uri="http://www.xes-standard.org/lifecycle.xesext"/>\n'
+    # UILog extension from Abb & Rehse (Information Systems 124 (2024) 102386),
+    # Fig. 8 - standardised keys for action type, target UI element, UI groups,
+    # application, system, input value, current state, user, and task.
+    '  <extension name="UIlog" prefix="ui" uri="https://gitlab.uni-mannheim.de/'
+    'jpmac/ui-log-data-model/-/raw/main/UILog_extension"/>\n'
     '  <classifier name="Activity" keys="concept:name"/>\n'
 )
 
@@ -293,6 +299,31 @@ _EVENT_COLS = (
 )
 
 
+def _ui_ext_attrs(ev: AnalyticsEvent) -> list[str]:
+    """UILog-extension attributes (paper Fig. 8) derived from one event row."""
+    props = ev.properties if isinstance(ev.properties, dict) else {}
+    target = props.get("target") if isinstance(props.get("target"), dict) else {}
+    element = props.get("selector") or (
+        target.get("label") or target.get("id") or target.get("tag") if target else None
+    )
+    out: list[str] = []
+    for key, value in (
+        ("ui:actionType", props.get("kind") or ev.event_type),
+        ("ui:uiElement", element),
+        ("ui:currentState", props.get("state")),
+        ("ui:uiGroups", props.get("ui_groups")),
+        ("ui:application", "mate-web" if ev.source == "client" else "mate-api"),
+        ("ui:system", ev.ua_class),
+        ("ui:inputValue", props.get("input_value")),
+        ("ui:user", ev.anon_user_id),
+        ("ui:task", props.get("task")),
+    ):
+        attr = _xes_attr(key, value)
+        if attr:
+            out.append(attr)
+    return out
+
+
 def _event_xml(ev: AnalyticsEvent) -> str:
     parts = [
         "    <event>\n",
@@ -300,6 +331,8 @@ def _event_xml(ev: AnalyticsEvent) -> str:
         f"      {_xes_date('time:timestamp', ev.occurred_at)}\n",
         f"      {_xes_attr('lifecycle:transition', 'complete')}\n",
     ]
+    for ui_attr in _ui_ext_attrs(ev):
+        parts.append(f"      {ui_attr}\n")
     for col in _EVENT_COLS:
         attr = _xes_attr(col, getattr(ev, col))
         if attr:
@@ -580,6 +613,80 @@ async def export_events_csv(
 
 
 # --------------------------------------------------------------------------
+# OCEL 2.0 export (object-centric UI log, Abb & Rehse reference model)
+# --------------------------------------------------------------------------
+
+
+@router.get("/export/events-ocel2")
+async def export_events_ocel2(
+    user: AdminUserDep,
+    session: SessionDep,
+    fmt: Literal["json", "sqlite", "xml"] = "json",
+    user_id: str | None = None,
+    source: EventSource | None = None,
+    event_type: str | None = None,
+    event_name: str | None = None,
+    path_prefix: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    session_id: str | None = None,
+) -> FileResponse:
+    """Download the filtered behaviour events as an OCEL 2.0 file.
+
+    Admin-only, deliberately cross-user. Events plus their materialised
+    objects (ui_element/ui_group/application/system/user/task/resources),
+    qualified E2O relations, and the static ``part_of`` hierarchy are written
+    by pm4py in the requested ocel-standard.org 2.0 format. Built in a
+    threadpool into a private temp file that is deleted after streaming -
+    unlike the NDJSON/CSV paths this cannot stream row-by-row (pm4py
+    materialises the log), so use the preview endpoint to bound huge exports.
+    """
+    from mate.api.services import analytics_ocel
+
+    filters = _event_filters(
+        user_id=user_id,
+        source=source,
+        event_type=event_type,
+        event_name=event_name,
+        path_prefix=path_prefix,
+        start=start,
+        end=end,
+        session_id=session_id,
+    )
+    frame = await analytics_ocel.load_ui_log(session, filters)
+    if not frame.events:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="No events match the filter"
+        )
+    path = await run_in_threadpool(
+        lambda: analytics_ocel.write_ocel_tmp(analytics_ocel.build_ocel(frame), fmt)
+    )
+    log.info(
+        "admin_ocel_export",
+        admin_id=user.id,
+        fmt=fmt,
+        events=len(frame.events),
+        objects=len(frame.objects),
+        filters=_log_filters(
+            user_id=user_id,
+            source=source,
+            event_type=event_type,
+            event_name=event_name,
+            path_prefix=path_prefix,
+            start=start,
+            end=end,
+            session_id=session_id,
+        ),
+    )
+    return FileResponse(
+        path,
+        media_type=analytics_ocel.media_type(fmt),
+        filename=analytics_ocel.download_name(fmt),
+        background=BackgroundTask(_unlink, path),
+    )
+
+
+# --------------------------------------------------------------------------
 # Export preview + facets (drive the filter UI)
 # --------------------------------------------------------------------------
 
@@ -593,8 +700,8 @@ class ExportPreview(BaseModel):
     matched_events: int
     matched_sessions: int
     distinct_users: int
-    date_min: datetime | None
-    date_max: datetime | None
+    date_min: UtcDateTime | None
+    date_max: UtcDateTime | None
     event_types: list[ExportTypeCount]
 
 

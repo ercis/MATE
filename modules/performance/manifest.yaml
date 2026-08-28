@@ -3,11 +3,15 @@ name: Performance
 version: 1.0.0
 category: foundation
 description: >-
-  Measures process speed and bottlenecks: throughput, lead, cycle, and sojourn
-  times, the 90th-percentile cycle time, and a performance-annotated
-  directly-follows graph.
+  Measures process speed and bottlenecks: throughput, cycle times, lead time,
+  and the 90th-percentile cycle time.
+about: >-
+  Find out where your process loses time: cycle-time and lead-time KPIs,
+  throughput, and the 90th-percentile outliers, plus a ranking of the activities
+  where cases spend the longest. Use it to locate bottlenecks, quantify how slow
+  the slowest cases really are, and overlay timing on the discovered process map
+  to see exactly which hand-offs hurt.
 keywords: ["performance", "bottleneck", "cycle time", "throughput", "lead time", "slow", "kpi", "sojourn", "p90", "waiting time"]
-author: FlowFactory
 license: MIT
 default_enabled: true
 # Runs entirely locally – safe to use against confidential event logs.
@@ -49,27 +53,49 @@ dependencies:
       - pandas
       - duckdb
     isolation: in_process
+    # Precompute runs in a killable child process so Cancel/shutdown stop it.
+    execution: worker
 
 frontend:
   panel: ./panel/index.tsx
+  log_filter: false
   widgets:
     - id: kpi-overview
       entry: ./widgets/KpiOverview.tsx
       title: Performance KPIs
       description: Cases, events, variants, throughput and cycle-time summary.
       icon: Gauge
-      # Fixed-size KPI scorecard (8 tiles): locked to a size that shows them all.
-      default_w: 7
+      # KPI scorecard (8 tiles): min sized to show them all.
+      default_w: 4
       default_h: 15
-      resizable: false
+      min_w: 3
+      min_h: 6
+      # Declaring the figures lets a placement show a SUBSET of them — the
+      # card's settings panel offers this list, and the chosen ids arrive as
+      # `config.kpis`. Ids must match FIGURES in widgets/KpiOverview.tsx.
+      kpis:
+        - { id: cases, title: Cases, info: How many process runs the log covers. }
+        - { id: events, title: Events, info: Total recorded steps across all cases. }
+        - { id: variants, title: Variants, info: Distinct paths cases take. Many variants means little standardisation. }
+        - { id: throughput, title: Throughput, info: Cases handled per day on average. }
+        - { id: avg_cycle, title: Avg cycle time }
+        - { id: median_cycle, title: Median cycle time, info: Half of cases finish faster than this. }
+        - { id: p90_cycle, title: P90 cycle time, info: Only the slowest 10% take longer., default: false }
+        - { id: lead_time, title: Lead time, default: false }
+      min_px_w: 280
+      min_px_h: 200
+      help:
+        what: "Headline timing figures for the filtered log."
+        read: "Cycle time is wall-clock from a case's first to last event, so it includes waiting. Compare it against processing time to see how much is queueing rather than work."
+        computed: "Medians over completed cases; cases still in flight are excluded because their duration isn't known yet."
     - id: bottlenecks
       entry: ./widgets/Bottlenecks.tsx
       title: Bottlenecks
-      description: Activities ranked by average sojourn time.
+      description: Activities ranked by average time spent (waiting + processing).
       icon: Hourglass
-      default_w: 6
+      default_w: 3
       default_h: 9
-      min_w: 5
+      min_w: 3
       min_h: 6
       config_schema:
         properties:
@@ -83,14 +109,20 @@ frontend:
             default: 8
             ui:
               widget: slider
+      min_px_w: 320
+      min_px_h: 240
+      help:
+        what: "Which activities take the longest, ranked by the time cases spend in them."
+        read: "Longer bars are slower. This is time spent AT an activity, so it captures both the work and the wait before the next step."
+        computed: "Median sojourn time per activity over completed cases. Click a bar to open it in the performance module."
     - id: activity-throughput
       entry: ./widgets/ActivityThroughput.tsx
       title: Activity throughput
       description: Event frequency per activity - the busiest steps.
       icon: BarChart3
-      default_w: 6
+      default_w: 3
       default_h: 9
-      min_w: 5
+      min_w: 3
       min_h: 6
       config_schema:
         properties:
@@ -104,7 +136,12 @@ frontend:
             default: 10
             ui:
               widget: slider
-
+      min_px_w: 320
+      min_px_h: 240
+      help:
+        what: "How many cases pass through each activity, and how fast."
+        read: "Read alongside Bottlenecks: a slow activity that few cases touch matters less than a moderately slow one on the main path."
+        computed: "Counts and durations over the filtered log."
 permissions:
   - read:event_log
   - write:module_results

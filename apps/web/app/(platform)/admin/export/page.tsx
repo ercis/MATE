@@ -208,15 +208,24 @@ function BehaviorExportCard() {
   async function runDownload() {
     setBusy(true);
     try {
-      const ext = format === "xes" ? "xes" : format === "csv" ? "csv" : "ndjson";
-      const route =
-        format === "xes"
+      const ocelFmt = format.startsWith("ocel-") ? format.slice(5) : null;
+      const ext = ocelFmt
+        ? `ocel.${ocelFmt}`
+        : format === "xes"
+          ? "xes"
+          : format === "csv"
+            ? "csv"
+            : "ndjson";
+      const route = ocelFmt
+        ? "events-ocel2"
+        : format === "xes"
           ? "event-log.xes"
           : format === "csv"
             ? "events.csv"
             : "events.ndjson";
       const params: Record<string, string | null | undefined> = { ...filters };
       if (format === "xes") params.case = caseNotion;
+      if (ocelFmt) params.fmt = ocelFmt;
       const qs = exportQueryString(params as ExportFilters & { case?: string });
       await downloadBlob(
         `/api/v1/admin/export/${route}${qs ? `?${qs}` : ""}`,
@@ -240,9 +249,9 @@ function BehaviorExportCard() {
       <CardContent className="space-y-4">
         <p className="text-xs text-muted-foreground">
           Behaviour-tracking events across <strong>all users</strong> - clicks,
-          navigation, server-side operation timings, and job outcomes. Filter the
-          set below, preview the match, then download as XES (process mining),
-          NDJSON, or CSV.
+          inputs, keyboard, pointer traces, navigation, server-side operations,
+          and job outcomes. Filter the set below, preview the match, then
+          download as OCEL 2.0 (object-centric UI log), XES, NDJSON, or CSV.
         </p>
 
         <div className="grid gap-3 md:grid-cols-2">
@@ -350,6 +359,9 @@ function BehaviorExportCard() {
               onChange={(e) => setFormat(e.target.value as ExportFormat)}
               className={SELECT_CLASS}
             >
+              <option value="ocel-json">OCEL 2.0 JSON (object-centric)</option>
+              <option value="ocel-sqlite">OCEL 2.0 SQLite</option>
+              <option value="ocel-xml">OCEL 2.0 XML</option>
               <option value="xes">XES (process mining)</option>
               <option value="ndjson">NDJSON</option>
               <option value="csv">CSV</option>

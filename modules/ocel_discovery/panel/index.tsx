@@ -1,14 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 import { formatNumber } from "@/lib/format";
 import { Badge } from "@/components/ui/badge";
-import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -20,13 +18,11 @@ import { EmptyState } from "@/components/empty-state";
 import { CanvasLayoutSkeleton } from "@/components/visualizations/canvases/shared/canvas-skeleton";
 
 import { ObjectGraphCanvas } from "./canvases/ObjectGraphCanvas";
-import { OcdfgCanvas, type OcdfgMode } from "./canvases/OcdfgCanvas";
+import { OcdfgCanvas } from "./canvases/OcdfgCanvas";
 import { OcpnCanvas } from "./canvases/OcpnCanvas";
 import { MatrixHeatmap, type MatrixMetric } from "./MatrixHeatmap";
 import { ObjectsSummary } from "./ObjectsSummary";
 import {
-  OBJECT_GRAPH_LABELS,
-  OCDFG_MEASURE_LABELS,
   useActivityObjectTypes,
   useObjectsGraph,
   useObjectsSummary,
@@ -35,7 +31,6 @@ import {
   useOcpn,
   type ObjectGraphType,
   type OcdfgData,
-  type OcdfgMeasure,
 } from "./queries";
 
 type View = "overview" | "ocdfg" | "ocpn" | "object-graph" | "matrix" | "objects";
@@ -57,7 +52,7 @@ export function OcelDiscoveryPanel({ logId }: { logId: string; moduleId: string 
       <div
         role="tablist"
         aria-label="Object-centric discovery views"
-        className="inline-flex max-w-xl items-center gap-1 rounded-lg bg-muted p-[3px]"
+        className="inline-flex w-fit items-center gap-1 rounded-lg bg-muted p-[3px]"
       >
         {VIEWS.map((v) => {
           const active = v.value === view;
@@ -69,7 +64,7 @@ export function OcelDiscoveryPanel({ logId }: { logId: string; moduleId: string 
               aria-selected={active}
               onClick={() => setView(v.value)}
               className={cn(
-                "flex-1 cursor-pointer rounded-md px-3 py-1.5 text-sm font-medium transition-all",
+                "cursor-pointer whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium transition-all",
                 active
                   ? "bg-background text-foreground shadow-sm"
                   : "text-foreground/60 hover:text-foreground",
@@ -128,6 +123,14 @@ function ObjectTypePicker({
       </SelectContent>
     </Select>
   );
+}
+
+/** Keeps the last non-undefined result so a canvas – and the settings popover
+ *  inside it – stays mounted while the next relation is computed. */
+function useSticky<T>(value: T | undefined): T | undefined {
+  const ref = useRef<T | undefined>(undefined);
+  if (value !== undefined) ref.current = value;
+  return ref.current;
 }
 
 function KpiTile({ label, value }: { label: string; value: string }) {
@@ -263,14 +266,8 @@ function ActivityList({ title, items }: { title: string; items: OcdfgData["start
 // OC-DFG (visual graph)
 // --------------------------------------------------------------------------
 
-const OCDFG_MEASURES: OcdfgMeasure[] = ["unique_objects", "events", "total_objects"];
-
 function OcdfgTab({ logId }: { logId: string }) {
   const { data, isLoading, isError, error } = useOcdfg(logId);
-  const [ot, setOt] = useState<string | null>(null);
-  const [measure, setMeasure] = useState<OcdfgMeasure>("unique_objects");
-  const [mode, setMode] = useState<OcdfgMode>("frequency");
-  const activeOt = ot ?? data?.object_types[0] ?? null;
 
   if (isLoading) return <CanvasLayoutSkeleton />;
   if (isError || !data)
@@ -278,46 +275,9 @@ function OcdfgTab({ logId }: { logId: string }) {
   if (data.object_types.length === 0)
     return <CanvasError message="This log has no object types." />;
 
-  return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-3">
-        <ObjectTypePicker value={activeOt} options={data.object_types} onChange={setOt} />
-        <Select
-          value={measure}
-          onValueChange={(v) => setMeasure(v as OcdfgMeasure)}
-          disabled={mode === "performance"}
-        >
-          <SelectTrigger className="h-8 w-[170px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {OCDFG_MEASURES.map((m) => (
-              <SelectItem key={m} value={m}>
-                {OCDFG_MEASURE_LABELS[m]}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <div className="flex items-center gap-2">
-          <Switch
-            id="ocdfg-perf"
-            checked={mode === "performance"}
-            onCheckedChange={(on) => setMode(on ? "performance" : "frequency")}
-          />
-          <Label htmlFor="ocdfg-perf" className="text-xs text-muted-foreground">
-            Performance
-          </Label>
-        </div>
-      </div>
-      <OcdfgCanvas
-        key={`${activeOt}-${measure}-${mode}`}
-        data={data}
-        objectType={activeOt}
-        measure={measure}
-        mode={mode}
-      />
-    </div>
-  );
+  // No controls above the canvas – object type, measure and the performance
+  // toggle live in the canvas settings popover (see `canvas-toolbar.tsx`).
+  return <OcdfgCanvas data={data} />;
 }
 
 // --------------------------------------------------------------------------
@@ -326,12 +286,6 @@ function OcdfgTab({ logId }: { logId: string }) {
 
 function OcpnTab({ logId }: { logId: string }) {
   const { data, isLoading, isError, error } = useOcpn(logId);
-  const [ot, setOt] = useState<string | null>(null);
-  const activeOt = ot ?? data?.object_types[0] ?? null;
-  const net = useMemo(
-    () => data?.nets.find((n) => n.object_type === activeOt) ?? null,
-    [data, activeOt],
-  );
 
   if (isLoading) return <CanvasLayoutSkeleton />;
   if (isError || !data)
@@ -341,60 +295,37 @@ function OcpnTab({ logId }: { logId: string }) {
   if (data.object_types.length === 0)
     return <CanvasError message="This log has no object types." />;
 
-  return (
-    <div className="space-y-3">
-      <ObjectTypePicker value={activeOt} options={data.object_types} onChange={setOt} />
-      {net && net.places.length > 0 ? (
-        <OcpnCanvas key={activeOt} net={net} />
-      ) : (
-        <CanvasError message="No Petri net for this object type – too few events to mine a model." />
-      )}
-    </div>
-  );
+  return <OcpnCanvas data={data} />;
 }
 
 // --------------------------------------------------------------------------
 // Object interaction / relation graph (visual graph)
 // --------------------------------------------------------------------------
 
-const GRAPH_TYPES: ObjectGraphType[] = [
-  "object_interaction",
-  "object_descendants",
-  "object_inheritance",
-  "object_cobirth",
-  "object_codeath",
-];
-
 function ObjectGraphTab({ logId }: { logId: string }) {
   const [graphType, setGraphType] = useState<ObjectGraphType>("object_interaction");
-  const { data, isLoading, isError, error } = useObjectsGraph(logId, graphType);
+  const q = useObjectsGraph(logId, graphType);
+  // Keep the previous graph on screen while the next relation is computed, so
+  // the settings popover the user just switched in stays open.
+  const shown = useSticky(q.data);
+
+  if (q.isError)
+    return (
+      <CanvasError message={(q.error as Error)?.message ?? "Failed to discover the object graph."} />
+    );
+  if (!shown) return <CanvasLayoutSkeleton />;
+  if (shown.object_types.length === 0)
+    return <CanvasError message="This log has no object types." />;
+  if (shown.edges.length === 0)
+    return <CanvasError message="No relations of this kind between object types." />;
 
   return (
-    <div className="space-y-3">
-      <Select value={graphType} onValueChange={(v) => setGraphType(v as ObjectGraphType)}>
-        <SelectTrigger className="h-8 w-[220px]">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {GRAPH_TYPES.map((g) => (
-            <SelectItem key={g} value={g}>
-              {OBJECT_GRAPH_LABELS[g]}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      {isLoading ? (
-        <CanvasLayoutSkeleton />
-      ) : isError || !data ? (
-        <CanvasError message={(error as Error)?.message ?? "Failed to discover the object graph."} />
-      ) : data.object_types.length === 0 ? (
-        <CanvasError message="This log has no object types." />
-      ) : data.edges.length === 0 ? (
-        <CanvasError message="No relations of this kind between object types." />
-      ) : (
-        <ObjectGraphCanvas key={graphType} data={data} />
-      )}
-    </div>
+    <ObjectGraphCanvas
+      data={shown}
+      graphType={graphType}
+      onGraphTypeChange={setGraphType}
+      busy={q.isFetching}
+    />
   );
 }
 

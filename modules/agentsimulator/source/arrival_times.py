@@ -1,8 +1,11 @@
-import pandas as pd
-import numpy as np
-import scipy.stats as st
 import math
+
+import numpy as np
+import pandas as pd
+import scipy.stats as st
+
 from source.arrival_distribution import get_best_fitting_distribution, get_inter_arrival_times
+
 
 def get_case_arrival_times(df, start_timestamp, num_cases_to_simulate, train=True, train_params=None):
     if train:
@@ -73,25 +76,35 @@ def get_min_max_time_per_day(case_start_timestamps):
     return min_max_time_per_day
 
 def get_average_occurence_of_cases_per_day(case_start_timestamps):
-    # get the mean and std of case arrivals per day of the week
-    days_of_week = [day.strftime('%A').upper() for day in case_start_timestamps]
-    days_of_week = set(days_of_week)
-    count_occurrences_by_day = {day: [] for day in days_of_week}
-    day = case_start_timestamps[0].strftime('%A').upper()
-    counter = 0
-    for time in case_start_timestamps:
-        if day == time.strftime('%A').upper():
-            counter += 1
-        else:
-            count_occurrences_by_day[day].append(counter)
-            counter = 1
-            day = time.strftime('%A').upper()
+    """Mean/std number of case arrivals on a calendar date, grouped by weekday.
 
-    average_occurrences_by_day = {day: () for day in days_of_week}
-    for key, value in count_occurrences_by_day.items():
-        average_occurrences_by_day[key] = (np.mean(value), np.std(value))
+    PATCHED (see also the cap in `random_sample_timestamps_`). The original
+    walked the list counting runs of consecutive equal weekday *names*, which
+    assumed two things that do not hold:
 
-    return average_occurrences_by_day
+    * that the list is in chronological order - it is not,
+      `get_arrival_parameters_for_train` builds it with `groupby('case_id')`,
+      so it comes out in case-id order;
+    * that one run == one calendar date - a date's arrivals were split across
+      several runs whenever the order jumped between weekdays.
+
+    On SEPSIS that reported ~1.15 arrivals/day against a true 2.13. Counting
+    per date and then averaging the dates that share a weekday is what the
+    caller actually needs, and is order-independent.
+    """
+    count_per_date = {}
+    for timestamp in case_start_timestamps:
+        date = timestamp.date()
+        count_per_date[date] = count_per_date.get(date, 0) + 1
+
+    count_occurrences_by_day = {}
+    for date, count in count_per_date.items():
+        count_occurrences_by_day.setdefault(date.strftime('%A').upper(), []).append(count)
+
+    return {
+        day: (np.mean(counts), np.std(counts))
+        for day, counts in count_occurrences_by_day.items()
+    }
 
 def increment_day_of_week(day_of_week):
     # Define a mapping of days of the week to their numerical representation
@@ -123,7 +136,17 @@ def random_sample_timestamps_(date, min_time, max_time, x, arrival_distribution,
         time = min_timestamp
     sampled_case_starting_times.append(time)
     smaller_than_max_time = True
-    while smaller_than_max_time:# and len(sampled_case_starting_times) < x:
+    # PATCHED: the per-day count cap `x` was commented out upstream, so every
+    # simulated day was filled from `min_time` to `max_time` at whatever rate the
+    # inter-arrival distribution happened to fit. `get_inter_arrival_times` fits
+    # that distribution on *intra-day* gaps only (it drops every day-crossing
+    # gap - 312 of 764 on SEPSIS), so the rate is biased short: 4.06h against a
+    # true 11.29h. Combined with a 24/7 log, whose min/max arrival time-of-day
+    # spans the whole day, SEPSIS generated 7.04 cases/day against a real 2.13 -
+    # ~4x the real arrival volume, which then queues up in the resources and
+    # inflates every simulated cycle time with it. The distribution still shapes
+    # *when* within the day arrivals land; `x` is what fixes *how many*.
+    while smaller_than_max_time and len(sampled_case_starting_times) < x:
         if arrival_distribution.type.value == "expon":
             scale = arrival_distribution.mean - arrival_distribution.min
             if scale < 0.0:

@@ -61,6 +61,8 @@ interface ModuleOpenAiCardProps {
   embeddingSlot?: SlotInfo | null;
   value: ModuleAiDraft;
   onChange: (next: ModuleAiDraft) => void;
+  /** When true the whole card is read-only (admin-locked ai card). */
+  disabled?: boolean;
 }
 
 export function ModuleOpenAiCard({
@@ -70,6 +72,7 @@ export function ModuleOpenAiCard({
   embeddingSlot,
   value,
   onChange,
+  disabled = false,
 }: ModuleOpenAiCardProps) {
   const check = useModuleAiCheck(moduleId);
   const [models, setModels] = useState<string[] | null>(null);
@@ -139,13 +142,14 @@ export function ModuleOpenAiCard({
             onChange={(e) => onChange({ ...value, api_key: e.target.value })}
             placeholder="sk-..."
             className="font-mono text-xs"
+            disabled={disabled}
           />
           <Button
             type="button"
             size="sm"
             variant="outline"
             className="cursor-pointer shrink-0 gap-1"
-            disabled={check.isPending || !value.api_key.trim()}
+            disabled={disabled || check.isPending || !value.api_key.trim()}
             onClick={() => runCheck(value.api_key.trim() || null)}
           >
             {check.isPending ? (
@@ -170,6 +174,7 @@ export function ModuleOpenAiCard({
         value={value.llm_model}
         options={chatModels}
         disabled={!checked}
+        readOnly={disabled}
         onChange={(m) => onChange({ ...value, llm_model: m })}
       />
 
@@ -181,6 +186,7 @@ export function ModuleOpenAiCard({
           value={value.embedding_model}
           options={embeddingModels}
           disabled={!checked}
+          readOnly={disabled}
           onChange={(m) => onChange({ ...value, embedding_model: m })}
         />
 
@@ -200,6 +206,7 @@ export function ModuleOpenAiCard({
               onChange={(e) => onDimensionsChange(e.target.value)}
               placeholder="Native (leave blank)"
               className="h-8 w-40 text-xs"
+              disabled={disabled}
             />
             <div className="flex flex-wrap gap-1">
               {DIMENSION_PRESETS.map((d) => {
@@ -208,12 +215,13 @@ export function ModuleOpenAiCard({
                   <button
                     key={d}
                     type="button"
+                    disabled={disabled}
                     onClick={() => onChange({ ...value, embedding_dimensions: d })}
                     className={
-                      "cursor-pointer rounded-md border px-2 py-0.5 text-[11px] transition-colors " +
+                      "rounded-md border px-2 py-0.5 text-[11px] transition-colors disabled:cursor-not-allowed disabled:opacity-50 " +
                       (active
                         ? "border-foreground bg-foreground text-background"
-                        : "border-border bg-muted/40 text-muted-foreground hover:text-foreground")
+                        : "cursor-pointer border-border bg-muted/40 text-muted-foreground hover:text-foreground")
                     }
                   >
                     {d}
@@ -223,8 +231,9 @@ export function ModuleOpenAiCard({
               {value.embedding_dimensions !== null && (
                 <button
                   type="button"
+                  disabled={disabled}
                   onClick={() => onChange({ ...value, embedding_dimensions: null })}
-                  className="cursor-pointer rounded-md border border-border bg-muted/40 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
+                  className="cursor-pointer rounded-md border border-border bg-muted/40 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Clear
                 </button>
@@ -249,6 +258,7 @@ function ModelSelect({
   value,
   options,
   disabled,
+  readOnly = false,
   onChange,
 }: {
   title: string;
@@ -257,6 +267,8 @@ function ModelSelect({
   value: string | null;
   options: string[];
   disabled: boolean;
+  /** Hard read-only (admin lock) - overrides the saved-not-in-list escape. */
+  readOnly?: boolean;
   onChange: (model: string | null) => void;
 }) {
   const savedNotInList = value !== null && !options.includes(value);
@@ -267,7 +279,7 @@ function ModelSelect({
       <Select
         value={value ?? "__none"}
         onValueChange={(v) => onChange(v === "__none" ? null : v)}
-        disabled={disabled && !savedNotInList}
+        disabled={readOnly || (disabled && !savedNotInList)}
       >
         <SelectTrigger className="text-xs">
           <SelectValue placeholder={placeholder} />

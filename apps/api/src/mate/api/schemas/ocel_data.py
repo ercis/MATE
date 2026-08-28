@@ -7,10 +7,11 @@ and event↔object relationships.
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel
+
+from mate.api.schemas.common import UtcDateTime
 
 
 class OcelObjectTypeEntry(BaseModel):
@@ -23,8 +24,8 @@ class OcelOverview(BaseModel):
     objects_count: int
     object_types_count: int
     relations_count: int
-    date_min: datetime | None = None
-    date_max: datetime | None = None
+    date_min: UtcDateTime | None = None
+    date_max: UtcDateTime | None = None
     object_types: list[OcelObjectTypeEntry]
     activities: list[str]
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   MarkerType,
   useEdgesState,
@@ -12,37 +12,52 @@ import {
 
 import { formatNumber } from "@/lib/format";
 
+import { runAfterPaint } from "../after-paint";
 import { elkLayout } from "../layout/layered";
 import { mapDirection, mapEdgeRouting, mapEdgeType, truncate } from "../layout/direction";
 import { ActivityNode, type ActivityNodeData } from "../nodes/activity-node";
 import type { DfgData } from "../types";
 import { CanvasShell } from "@/components/visualizations/canvases/shared/canvas-shell";
 import { CanvasLayoutSkeleton } from "@/components/visualizations/canvases/shared/canvas-skeleton";
+import { HeuristicsCanvasSettings } from "../heuristics-canvas-controls";
 import {
   useGeneralSettings,
   useHeuristicsRenderSettings,
   useNodePositions,
   usePersistNodePositions,
+  useResetPositions,
 } from "../discovery-settings-context";
 
 const nodeTypes = { activity: ActivityNode } as const;
 
 interface HeuristicsNetCanvasProps {
   data: DfgData;
+  /** A re-fetch (threshold change) is in flight while the previous net stays. */
+  busy?: boolean;
 }
 
-export function HeuristicsNetCanvas({ data }: HeuristicsNetCanvasProps) {
+export function HeuristicsNetCanvas({ data, busy }: HeuristicsNetCanvasProps) {
   const general = useGeneralSettings();
   const [heur] = useHeuristicsRenderSettings();
   const positions = useNodePositions("heuristics");
   const persist = usePersistNodePositions("heuristics");
+  const resetPositions = useResetPositions();
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [laid, setLaid] = useState(false);
+  // First layout is deferred past first paint (skeleton) so elkjs' synchronous
+  // main-thread solver doesn't block it; re-layouts run inline.
+  const didFirstLayout = useRef(false);
+  // Last ELK result BEFORE persisted drags are merged in – what "Reset layout"
+  // puts back. `positions` is deliberately not an effect dep (it changes on
+  // every drag persist and would re-run the solver), so clearing the store
+  // alone leaves the dragged nodes on screen; reset has to re-seed too.
+  const autoNodesRef = useRef<Node[]>([]);
 
   useEffect(() => {
     let cancelled = false;
+    let cancelScheduled: (() => void) | undefined;
     const maxFreq = data.activities.reduce((m, a) => Math.max(m, a.frequency), 1);
     const maxEdgeFreq = data.edges.reduce((m, e) => Math.max(m, e.frequency), 1);
     const startSet = new Set(Object.keys(data.start_activities));
@@ -100,25 +115,33 @@ export function HeuristicsNetCanvas({ data }: HeuristicsNetCanvasProps) {
       };
     });
 
-    elkLayout(initialNodes, initialEdges, {
-      direction: mapDirection(general.layoutDirection),
-      edgeRouting: mapEdgeRouting(general.edgeRouting),
-      nodeNode: 50,
-      nodeNodeBetweenLayers: 120,
-      defaultSize: { width: 200, height: 64 },
-    }).then((result) => {
-      if (cancelled) return;
-      const merged = result.nodes.map((n) => {
-        const p = positions[n.id];
-        return p ? { ...n, position: p } : n;
+    const runLayout = () => {
+      didFirstLayout.current = true;
+      elkLayout(initialNodes, initialEdges, {
+        direction: mapDirection(general.layoutDirection),
+        edgeRouting: mapEdgeRouting(general.edgeRouting),
+        nodeNode: 50,
+        nodeNodeBetweenLayers: 120,
+        defaultSize: { width: 200, height: 64 },
+      }).then((result) => {
+        if (cancelled) return;
+        autoNodesRef.current = result.nodes;
+        const merged = result.nodes.map((n) => {
+          const p = positions[n.id];
+          return p ? { ...n, position: p } : n;
+        });
+        setNodes(merged);
+        setEdges(result.edges);
+        setLaid(true);
       });
-      setNodes(merged);
-      setEdges(result.edges);
-      setLaid(true);
-    });
+    };
+
+    if (didFirstLayout.current) runLayout();
+    else cancelScheduled = runAfterPaint(runLayout);
 
     return () => {
       cancelled = true;
+      cancelScheduled?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -148,6 +171,12 @@ export function HeuristicsNetCanvas({ data }: HeuristicsNetCanvasProps) {
       fitViewKey={`hn-${data.activities.length}`}
       miniMap={general.showMinimap}
       showGrid={general.showGrid}
+      busy={busy}
+      settings={<HeuristicsCanvasSettings />}
+      onReset={() => {
+        resetPositions("heuristics");
+        setNodes([...autoNodesRef.current]);
+      }}
       onNodesChange={onNodesChange}
       onEdgesChange={onEdgesChange}
       onNodeDragStop={onNodeDragStop}

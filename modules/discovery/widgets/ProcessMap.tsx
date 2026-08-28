@@ -3,7 +3,7 @@
 import { DfgCanvas } from "../panel/canvases/DfgCanvas";
 import { DiscoverySettingsProvider } from "../panel/discovery-settings-context";
 import { useDiscoveryDfg } from "../panel/queries";
-import { CardShell } from "./_kit";
+import {CardShell} from "@/components/dashboards/kit";
 
 /**
  * Directly-follows graph of the dashboard-filtered event log.

@@ -21,6 +21,16 @@ import {
 } from "recharts";
 import { toast } from "sonner";
 
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -30,6 +40,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { EmptyState } from "@/components/empty-state";
 import { api, ApiError } from "@/lib/api";
 import { subscribeJob } from "@/lib/ws";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -38,7 +49,14 @@ import ArrivalsComparison from "../widgets/ArrivalsComparison";
 import CycleTimeComparison from "../widgets/CycleTimeComparison";
 import FidelityScorecard from "../widgets/FidelityScorecard";
 import { COLORS, LegendDots } from "../widgets/_kit";
-import { CANONICAL_RESULT_HEADERS, useAgentSimResults, type AgentSimResult } from "./queries";
+import {
+  CANONICAL_RESULT_HEADERS,
+  resultsKey,
+  simJobKey,
+  useAgentSimResults,
+  useSimulationGate,
+  type AgentSimResult,
+} from "./queries";
 
 interface RunConfig {
   num_simulations: number;
@@ -46,6 +64,24 @@ interface RunConfig {
   extr_delays: boolean;
   determine_automatically: boolean;
 }
+
+type ExportFormat = "csv" | "xes";
+
+/** One simulated run as offered by the download picker. */
+type DownloadEntry = { index: number; cases?: number; events?: number };
+
+const EXPORT_FORMATS: { id: ExportFormat; label: string; hint: string }[] = [
+  {
+    id: "csv",
+    label: "CSV",
+    hint: "Flat table – opens in Excel and re-imports into Mate.",
+  },
+  {
+    id: "xes",
+    label: "XES",
+    hint: "IEEE 1849 event log – the standard for process-mining tools.",
+  },
+];
 
 const DEFAULTS: RunConfig = {
   num_simulations: 5,
@@ -77,73 +113,126 @@ export default function AgentSimulatorPanel({ logId }: { logId: string; moduleId
   }, [cfgQuery.isSuccess, cfgQuery.data]);
 
   // ── run lifecycle ──────────────────────────────────────────────────────
-  const [running, setRunning] = useState(false);
+  // Job state comes from the shared gate (a poll of the per-user jobs list),
+  // so a run started from a dashboard widget – or another tab – lights this
+  // panel up too. The SSE stream is attached on top of whichever job is
+  // active for smooth progress + completion toasts.
+  const gate = useSimulationGate(logId);
+  const activeJob = gate.activeJob;
+  // `kicking` covers the config PUT that precedes the enqueue mutation, so a
+  // double-click can't start two runs.
+  const [kicking, setKicking] = useState(false);
+  const running = kicking || gate.starting || activeJob != null;
+
   const [progress, setProgress] = useState<{ fraction: number; stage: string }>({
     fraction: 0,
     stage: "",
   });
   const subRef = useRef<{ close: () => void } | null>(null);
+  const subbedJobId = useRef<string | null>(null);
   useEffect(() => () => subRef.current?.close(), []);
 
-  function stop() {
-    setRunning(false);
+  useEffect(() => {
+    const job = activeJob;
+    if (!job || subbedJobId.current === job.id) return;
+    subbedJobId.current = job.id;
     subRef.current?.close();
-    subRef.current = null;
-  }
+    // Seed from the polled row so an externally-started job paints a sensible
+    // bar before the first streamed tick arrives.
+    const total = job.progress_total ?? 0;
+    setProgress({
+      fraction: total > 0 ? job.progress_current / total : 0,
+      stage: job.message ?? job.stage ?? "Queued…",
+    });
+
+    const finish = (kind: "completed" | "failed" | "cancelled", error?: string) => {
+      subRef.current?.close();
+      subRef.current = null;
+      subbedJobId.current = null;
+      if (kind === "completed") {
+        toast.success("Simulation complete");
+        void qc.invalidateQueries({ queryKey: resultsKey(logId) });
+      } else if (kind === "failed") {
+        toast.error(`Simulation failed: ${error ?? "unknown error"}`);
+      } else {
+        toast("Simulation cancelled");
+      }
+      // Flip the gate promptly instead of waiting for the next poll tick.
+      void qc.invalidateQueries({ queryKey: simJobKey(logId) });
+    };
+
+    subRef.current = subscribeJob(job.id, (env) => {
+      const p = env.payload as Record<string, unknown>;
+      if (env.topic === "job.progress") {
+        const cur = typeof p.current === "number" ? p.current : 0;
+        const tot = typeof p.total === "number" && p.total > 0 ? p.total : 100;
+        setProgress({ fraction: cur / tot, stage: String(p.message ?? p.stage ?? "") });
+      } else if (env.topic === "job.snapshot") {
+        // Attached (or reconnected) after the job already ended.
+        const st = String(p.status ?? "");
+        if (st === "completed" || st === "failed" || st === "cancelled") {
+          finish(st, typeof p.error === "string" ? p.error : undefined);
+        }
+      } else if (env.topic === "job.completed") {
+        finish("completed");
+      } else if (env.topic === "job.failed") {
+        finish("failed", String(p.error ?? p.message ?? "unknown error"));
+      } else if (env.topic === "job.cancelled") {
+        finish("cancelled");
+      }
+    });
+  }, [activeJob, logId, qc]);
 
   async function run() {
     if (running) return;
-    setRunning(true);
-    setProgress({ fraction: 0, stage: "Queued…" });
+    setKicking(true);
     try {
+      // Persist the form first – ctx.config is the only channel for run
+      // params into a subprocess job – then enqueue via the shared gate.
       await api(`/api/v1/modules/agentsimulator/config`, {
         method: "PUT",
         json: { config: form, enabled: true },
       });
-      const { job_id } = await api<{ job_id: string }>(
-        `/api/v1/modules/agentsimulator/simulate?log_id=${encodeURIComponent(logId)}`,
-        { method: "POST", headers: CANONICAL_RESULT_HEADERS },
-      );
-      subRef.current = subscribeJob(job_id, (env) => {
-        const p = env.payload as Record<string, unknown>;
-        if (env.topic === "job.progress") {
-          const cur = typeof p.current === "number" ? p.current : 0;
-          const tot = typeof p.total === "number" && p.total > 0 ? p.total : 100;
-          setProgress({ fraction: cur / tot, stage: String(p.message ?? p.stage ?? "") });
-        } else if (env.topic === "job.completed") {
-          stop();
-          toast.success("Simulation complete");
-          qc.invalidateQueries({ queryKey: ["modules", "agentsimulator", "results", logId] });
-        } else if (env.topic === "job.failed") {
-          stop();
-          toast.error(`Simulation failed: ${String(p.error ?? p.message ?? "unknown error")}`);
-        } else if (env.topic === "job.cancelled") {
-          stop();
-          toast("Simulation cancelled");
-        }
-      });
+      await gate.startAsync();
     } catch (e) {
-      stop();
       toast.error(
         e instanceof ApiError ? `Could not start: ${String(e.detail)}` : "Could not start simulation",
       );
+    } finally {
+      setKicking(false);
     }
   }
 
-  async function download() {
+  // "Re-run to apply": the options form differs from the params of the run
+  // whose results are on screen.
+  const lastParams = data?.params;
+  const configChanged =
+    ready &&
+    lastParams != null &&
+    (form.num_simulations !== lastParams.num_simulations ||
+      form.central_orchestration !== lastParams.central_orchestration ||
+      form.extr_delays !== lastParams.extr_delays ||
+      form.determine_automatically !== lastParams.determine_automatically);
+
+  async function download(index: number, format: ExportFormat = "csv") {
     try {
-      const r = await api<{ status: string; csv?: string; filename?: string }>(
-        `/api/v1/modules/agentsimulator/simulated-log?log_id=${encodeURIComponent(logId)}`,
+      // The two query params a subprocess route forwards to its handler are the
+      // stub's `args`/`kwargs`: the run index travels as `?args=<i>` and the
+      // export format as `?kwargs=<fmt>` (see module._parse_log_index /
+      // _parse_format).
+      const r = await api<{ status: string; content?: string; filename?: string }>(
+        `/api/v1/modules/agentsimulator/simulated-log?log_id=${encodeURIComponent(logId)}&args=${index}&kwargs=${format}`,
         { headers: CANONICAL_RESULT_HEADERS },
       );
-      if (r.status !== "ready" || !r.csv) {
+      if (r.status !== "ready" || !r.content) {
         toast("No simulated log to download yet.");
         return;
       }
-      const url = URL.createObjectURL(new Blob([r.csv], { type: "text/csv" }));
+      const mime = format === "xes" ? "application/xml" : "text/csv";
+      const url = URL.createObjectURL(new Blob([r.content], { type: mime }));
       const a = document.createElement("a");
       a.href = url;
-      a.download = r.filename ?? "simulated_log.csv";
+      a.download = r.filename ?? `simulated_log_${index + 1}.${format}`;
       a.click();
       URL.revokeObjectURL(url);
     } catch {
@@ -167,14 +256,25 @@ export default function AgentSimulatorPanel({ logId }: { logId: string; moduleId
                 </p>
               </div>
             </div>
-            <Button onClick={run} disabled={running} size="sm">
-              {running ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Play className="h-4 w-4" />
+            <div className="flex shrink-0 items-center gap-2">
+              {configChanged && !running && (
+                <Badge
+                  variant="outline"
+                  className="border-amber-400/60 text-amber-600 dark:text-amber-400"
+                  title="The options below differ from the run shown – Re-run to apply them"
+                >
+                  Settings changed
+                </Badge>
               )}
-              {running ? "Running…" : ready ? "Re-run" : "Run simulation"}
-            </Button>
+              <Button onClick={run} disabled={running} size="sm">
+                {running ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Play className="h-4 w-4" />
+                )}
+                {running ? "Running…" : ready ? "Re-run" : "Run simulation"}
+              </Button>
+            </div>
           </div>
 
           <Separator />
@@ -236,11 +336,27 @@ export default function AgentSimulatorPanel({ logId }: { logId: string; moduleId
         <Skeleton className="h-96 w-full" />
       ) : ready && data ? (
         <Results logId={logId} data={data} onDownload={download} />
-      ) : (
+      ) : running ? (
         <div className="rounded-md border border-dashed border-border bg-card/40 p-8 text-center text-sm text-muted-foreground">
-          No simulation has been run for this log yet. Set your options and hit{" "}
-          <span className="font-medium text-foreground">Run simulation</span>.
+          <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin text-primary" />
+          Simulation running – results will appear here when it finishes.
         </div>
+      ) : results.isFetching ? (
+        // A run just finished and the results are being refetched – bridge the
+        // gap instead of flashing the empty-state CTA.
+        <Skeleton className="h-96 w-full" />
+      ) : (
+        <EmptyState
+          icon={Bot}
+          title="No simulation yet"
+          description="AgentSimulator learns agent behaviour, working calendars and handovers from this log, then generates synthetic runs and scores how closely they match the real process."
+          primaryAction={
+            <Button onClick={run}>
+              <Play className="h-4 w-4" /> Run simulation
+            </Button>
+          }
+          className="py-10"
+        />
       )}
     </div>
   );
@@ -253,8 +369,13 @@ function Results({
 }: {
   logId: string;
   data: AgentSimResult;
-  onDownload: () => void;
+  onDownload: (index: number, format: ExportFormat) => void;
 }) {
+  // The run whose format picker is open; `null` = dialog closed.
+  const [picking, setPicking] = useState<DownloadEntry | null>(null);
+  // Caches written before per-run downloads carry no `downloads` list but do
+  // hold run 0 under the legacy cache key - offer that single download.
+  const downloads: DownloadEntry[] = data.downloads?.length ? data.downloads : [{ index: 0 }];
   return (
     <div className="space-y-6">
       {/* Summary + fidelity */}
@@ -320,19 +441,96 @@ function Results({
         </CardContent>
       </Card>
 
-      {/* Preview + download */}
+      {/* Preview + downloads */}
       <Card>
         <CardContent className="space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            <h3 className="text-sm font-semibold">Simulated log</h3>
-            <Button onClick={onDownload} size="sm" variant="outline">
-              <Download className="h-4 w-4" /> Download CSV
-            </Button>
+          <div>
+            <h3 className="text-sm font-semibold">
+              Simulated {downloads.length === 1 ? "log" : `logs (${downloads.length})`}
+            </h3>
+            <p className="text-[11px] text-muted-foreground">
+              Each run is one synthetic log generated by the same model; pick CSV or XES when
+              downloading.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {downloads.map((d) => (
+              <Button key={d.index} onClick={() => setPicking(d)} size="sm" variant="outline">
+                <Download className="h-4 w-4" />
+                Run {d.index + 1}
+                {d.cases != null && (
+                  <span className="text-muted-foreground">· {d.cases} cases</span>
+                )}
+              </Button>
+            ))}
           </div>
           <PreviewTable data={data} />
         </CardContent>
       </Card>
+
+      <DownloadFormatDialog
+        run={picking}
+        onClose={() => setPicking(null)}
+        onPick={(index, format) => {
+          setPicking(null);
+          onDownload(index, format);
+        }}
+      />
     </div>
+  );
+}
+
+/** Format picker shown when a run's download button is clicked. */
+function DownloadFormatDialog({
+  run,
+  onClose,
+  onPick,
+}: {
+  run: DownloadEntry | null;
+  onClose: () => void;
+  onPick: (index: number, format: ExportFormat) => void;
+}) {
+  // Radix unmounts the content on close, so the label/counts are read from the
+  // last non-null run to avoid text flicker during the exit animation.
+  const shown = useRef<DownloadEntry | null>(null);
+  if (run) shown.current = run;
+  const entry = run ?? shown.current;
+
+  return (
+    <AlertDialog open={run != null} onOpenChange={(open) => !open && onClose()}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogMedia>
+            <Download />
+          </AlertDialogMedia>
+          <AlertDialogTitle>Download run {(entry?.index ?? 0) + 1}</AlertDialogTitle>
+          <AlertDialogDescription>
+            {entry?.cases != null
+              ? `${entry.cases} cases${entry.events != null ? `, ${entry.events} events` : ""} – choose a format.`
+              : "Choose a format for the simulated log."}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {EXPORT_FORMATS.map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              onClick={() => entry && onPick(entry.index, f.id)}
+              className="rounded-md border border-border/60 bg-card/40 p-3 text-left transition-colors hover:border-primary hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            >
+              <span className="flex items-center gap-1.5 text-sm font-medium">
+                <Download className="h-4 w-4 text-primary" />
+                {f.label}
+              </span>
+              <span className="mt-1 block text-xs text-muted-foreground">{f.hint}</span>
+            </button>
+          ))}
+        </div>
+        <AlertDialogFooter>
+          <AlertDialogCancel size="sm">Cancel</AlertDialogCancel>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
@@ -534,7 +732,7 @@ function PreviewTable({ data }: { data: AgentSimResult }) {
         </table>
       </div>
       <p className="text-[11px] text-muted-foreground">
-        Showing {pv.rows.length} of {pv.total} events from one simulated log.
+        Showing {pv.rows.length} of {pv.total} events from run 1.
       </p>
     </div>
   );

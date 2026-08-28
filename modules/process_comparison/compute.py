@@ -82,6 +82,39 @@ def discover_dfg(df: Any) -> tuple[dict[tuple[str, str], int], dict[str, int], d
     )
 
 
+def discover_bpmn(df: Any) -> Any:
+    """Inductive-miner BPMN graph for one log (pm4py BPMN object).
+
+    The graph carries no diagram-interchange (coordinates); ``serialize_bpmn``
+    round-trips it to XML and the panel lays it out client-side with
+    bpmn-auto-layout. Heavier than ``discover_dfg`` - the route offloads it.
+    """
+    import pm4py
+
+    return pm4py.discover_bpmn_inductive(rename_pm4py(df))
+
+
+def summary_kpis(df: Any) -> dict[str, float]:
+    """Headline KPIs for one log: case / event / activity / variant counts plus
+    mean case throughput in seconds (per-case ``max - min`` timestamp, averaged).
+
+    Counts come back as ``int`` (assignable to ``float``); throughput is a float.
+    An empty frame or all single-event cases yields ``throughput_s == 0.0``.
+    """
+    grouped = df.groupby("case_id", sort=False)["timestamp"]
+    spans = (grouped.max() - grouped.min()).dt.total_seconds()
+    mean_throughput_s = float(spans.mean()) if len(spans) else 0.0
+    if mean_throughput_s != mean_throughput_s:  # NaN guard (empty frame)
+        mean_throughput_s = 0.0
+    return {
+        "cases": int(df["case_id"].nunique()),
+        "events": len(df),
+        "activities": int(df["activity"].nunique()),
+        "variants": len(variant_counts(df)),
+        "throughput_s": mean_throughput_s,
+    }
+
+
 def footprint_relations(df: Any) -> set[tuple[str, str]]:
     """Behavioural footprint as a set of labelled relations.
 

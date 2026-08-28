@@ -7,7 +7,7 @@ export default function Loading() {
       {Array.from({ length: 2 }).map((_, i) => (
         <div
           key={i}
-          className="space-y-4 rounded-xl border border-border bg-card p-6"
+          className="space-y-4 rounded-xl border border-white/10 bg-card/60 backdrop-blur-sm p-6"
         >
           <Skeleton className="h-5 w-24" />
           <div className="flex items-center gap-4">

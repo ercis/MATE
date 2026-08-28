@@ -13,8 +13,13 @@ function PageContainer({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="page-container"
+      // Every page (and the route-level skeletons) mounts through this
+      // container, so the entry animation gives all navigations one
+      // consistent fade + 8px rise. CSS-only: plays on server-rendered
+      // markup, and the global reduced-motion rule disables it.
       className={cn(
         "mx-auto w-full max-w-[1760px] px-4 py-6 sm:px-6 lg:px-8",
+        "animate-in fade-in-0 slide-in-from-bottom-2 duration-300 ease-out",
         className,
       )}
       {...props}

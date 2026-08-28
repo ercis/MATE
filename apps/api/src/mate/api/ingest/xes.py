@@ -90,6 +90,55 @@ def _open(path: Path) -> BinaryIO:
     return cast(BinaryIO, path.open("rb"))
 
 
+def sample_xes(
+    path: Path,
+    *,
+    max_traces: int = 200,
+    max_events: int = 2000,
+) -> list[dict[str, Any]]:
+    """Parse only the first traces of `path` - enough to describe its schema.
+
+    Same row shape as `parse_xes`, but the `iterparse` loop stops as soon as
+    either cap is hit. Used by the import wizard's probe so a multi-GB XES can
+    be mapped without reading (or even fully uploading) the whole log.
+    """
+    rows: list[dict[str, Any]] = []
+    traces = 0
+
+    with _open(path) as fh:
+        ctx = etree.iterparse(
+            fh,
+            events=("end",),
+            tag=(f"{XES_NS}trace", f"{XES_NS_NOSLASH}trace", "trace"),
+        )
+        for _evt, trace in ctx:
+            trace_attrs: dict[str, Any] = {}
+            for key, value in _iter_attribute_pairs(trace):
+                canonical = _TRACE_KEY_MAP.get(key, key)
+                trace_attrs[canonical] = value
+
+            for event_elem in trace.iterchildren(
+                f"{XES_NS}event", f"{XES_NS_NOSLASH}event", "event"
+            ):
+                row: dict[str, Any] = dict(trace_attrs)
+                for key, value in _iter_attribute_pairs(event_elem):
+                    canonical = _EVENT_KEY_MAP.get(key, key)
+                    row[canonical] = value
+                rows.append(row)
+
+            traces += 1
+            trace.clear(keep_tail=True)
+            while trace.getprevious() is not None:
+                parent = trace.getparent()
+                if parent is None:
+                    break
+                del parent[0]
+            if traces >= max_traces or len(rows) >= max_events:
+                break
+
+    return rows
+
+
 def parse_xes(
     path: Path,
     *,

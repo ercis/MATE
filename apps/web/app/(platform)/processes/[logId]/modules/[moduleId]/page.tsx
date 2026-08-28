@@ -1,35 +1,40 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ArrowLeft, FileBox } from "lucide-react";
+import { FileBox } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/empty-state";
-import { PageContainer, PageTitle } from "@/components/page";
-import { useEventLog, useModules } from "@/lib/queries";
-import { getModulePanel } from "@/lib/module-panels";
+import { PageContainer } from "@/components/page";
+import { PanelSkeleton } from "@/components/skeletons";
+import { useModules } from "@/lib/queries";
+import { getModulePanel, prefetchModulePanel } from "@/lib/module-panels";
+import { LogFilterProvider } from "@/components/processes/log-filter";
 
 export default function ModulePage() {
   const params = useParams<{ logId: string; moduleId: string }>();
   const { logId, moduleId } = params;
 
-  const { data: log } = useEventLog(logId);
+  // Start the panel bundle + runtime on mount rather than after `useModules`
+  // resolves. The route already knows which module it is, so gating the two
+  // large transfers behind the module-list round trip only serialised them.
+  // A deep link or reload (no hover prefetch from the grid) used to pay all
+  // three back to back. Rendering still waits for the query below - this only
+  // moves the fetch off the critical path, it does not mount anything early.
+  useEffect(() => {
+    prefetchModulePanel(moduleId);
+  }, [moduleId]);
+
   const { data: modules, isLoading, isError } = useModules(logId);
 
   const mod = modules?.find((m) => m.id === moduleId);
 
+  // Same shell as loading.tsx, so the route-level and data-level skeletons are
+  // interchangeable - no flash or jump when one hands over to the other.
   if (isLoading) {
-    return (
-      <PageContainer className="space-y-4">
-        <Skeleton className="h-8 w-72" />
-        <Skeleton className="h-4 w-96" />
-        <Skeleton className="h-96 w-full" />
-      </PageContainer>
-    );
+    return <PanelSkeleton />;
   }
   if (isError) {
     return (
@@ -57,27 +62,41 @@ export default function ModulePage() {
 
   return (
     <PageContainer>
-      <header className="flex items-start gap-3 pb-6">
-        <div className="space-y-1">
-          <Button asChild variant="ghost" size="sm" className="cursor-pointer -ml-2 gap-1">
-            <Link href={`/processes/${logId}`}>
-              <ArrowLeft className="h-3.5 w-3.5" />
-              <span>{log?.name ?? "Back"}</span>
-            </Link>
-          </Button>
-          <div className="flex items-center gap-2">
-            <PageTitle>{mod.name}</PageTitle>
-            <Badge variant="outline" className="border-0 bg-muted text-[10px] uppercase">
-              {mod.category.replace("_", " ")}
-            </Badge>
-          </div>
-          {mod.description && (
-            <p className="max-w-2xl text-sm text-muted-foreground">{mod.description}</p>
-          )}
+      {/* Deep links can reach a module the grid renders grayed-out (disabled,
+          or the log doesn't meet its manifest requirements). Mounting the
+          panel would just fail on its first query – explain instead. */}
+      {mod.enabled === false ? (
+        <div className="rounded-xl border border-dashed border-border bg-card/40 px-6 py-16 text-center">
+          <p className="text-sm font-medium">This module is disabled</p>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Enable it on the{" "}
+            <Link href={`/modules/${mod.id}`} className="underline underline-offset-2">
+              Modules
+            </Link>{" "}
+            page to open it.
+          </p>
         </div>
-      </header>
-
-      <ModulePanelSlot logId={logId} moduleId={mod.id} hasFrontend={mod.has_frontend} />
+      ) : (mod.availability?.status ?? "available") === "unavailable" ? (
+        <div className="rounded-xl border border-dashed border-border bg-card/40 px-6 py-16 text-center">
+          <p className="text-sm font-medium">Not available for this process</p>
+          <ul className="mt-2 space-y-1 text-sm text-muted-foreground">
+            {(mod.availability?.reasons ?? ["This process doesn't meet the module's requirements."]).map(
+              (r, i) => (
+                <li key={i}>{r}</li>
+              ),
+            )}
+          </ul>
+        </div>
+      ) : (
+        // Log-scoped global filter: sets the active log's ephemeral event filter
+        // and re-scopes this (and every other) module view for the log. Wraps
+        // the panel so its data queries pick up the `X-FF-Event-Filter` header.
+        // Modules opt out via the manifest (`frontend.log_filter: false`) and
+        // mount without the bar or the header.
+        <LogFilterProvider logId={logId} enabled={mod.supports_log_filter}>
+          <ModulePanelSlot logId={logId} moduleId={mod.id} hasFrontend={mod.has_frontend} />
+        </LogFilterProvider>
+      )}
     </PageContainer>
   );
 }

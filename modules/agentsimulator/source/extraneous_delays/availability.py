@@ -1,9 +1,9 @@
-from typing import List
 
 import pandas as pd
 import pytz
 
-from source.agent_types.resource_calendar import RCalendar, Interval
+from source.agent_types.resource_calendar import Interval, RCalendar
+
 
 def get_last_available_timestamp(start: pd.Timestamp, end: pd.Timestamp, schedule: RCalendar) -> pd.Timestamp:
     """
@@ -88,7 +88,7 @@ def get_last_available_timestamp(start: pd.Timestamp, end: pd.Timestamp, schedul
 
 def absolute_unavailability_intervals_within(
     start: pd.Timestamp, end: pd.Timestamp, schedule: RCalendar
-) -> List[Interval]:
+) -> list[Interval]:
     """
     Compute the list of intervals (in absolute timestamps) from [start] to [end] where, based on the working intervals in [schedule], the
     resource is not working.

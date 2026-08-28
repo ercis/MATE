@@ -6,7 +6,8 @@ attributes) instead of activity alone. The downstream entropy measures
 are then computed against this enriched EPA, while every measure that
 depends solely on the activity sequence (Lempel-Ziv, Pentland process,
 structure, affinity, deviation-from-random, magnitude, ...) is identical
-to the plain bundle and is reused from :mod:`complexity_core`.
+to the plain bundle and is **reused** from it (pass ``basic_metrics``)
+instead of being recomputed a second time.
 
 The expected attribute sets are::
 
@@ -21,31 +22,19 @@ mapped to case_id / activity / timestamp also count toward the check.
 
 from __future__ import annotations
 
-from typing import Any, Hashable
+from collections.abc import Hashable
+from typing import Any
 
 import pandas as pd
 
 from .complexity_core import (
-    affinity,
     build_epa,
     compute_basic_metrics,
-    deviation_from_random,
-    lempel_ziv_complexity,
-    level_of_detail,
-    magnitude,
-    pct_distinct_traces,
-    pentland_process,
     pentland_task,
     sequence_entropy,
     sequence_entropy_forgetting,
-    structure,
-    support,
-    time_granularity,
-    trace_length_stats,
     variant_entropy,
-    variety,
 )
-
 
 REQUIRED_TRACE_ATTRS: frozenset[str] = frozenset(
     {"variant", "concept:name", "creator", "variant-index"}
@@ -70,6 +59,25 @@ _CANONICAL_TO_XES = {
     "resource": "org:resource",
     "lifecycle": "lifecycle:transition",
 }
+
+# Metrics that only depend on the activity sequence - identical between the
+# basic and the enriched bundle, so they are copied from the basic result.
+_SEQUENCE_ONLY_KEYS = (
+    "magnitude",
+    "support",
+    "variety",
+    "level_of_detail",
+    "time_granularity_s",
+    "structure",
+    "affinity",
+    "trace_length_min",
+    "trace_length_avg",
+    "trace_length_max",
+    "distinct_traces_pct",
+    "deviation_from_random",
+    "lempel_ziv",
+    "pentland_process",
+)
 
 
 def is_enriched_supported(detected_schema: dict[str, Any] | None) -> bool:
@@ -122,17 +130,19 @@ def _build_enriched_key_fn(df: pd.DataFrame) -> Any:
     attr_cols = sorted(set(attr_cols))
 
     if not attr_cols:
+
         def key_only_activity(row: Any) -> Hashable:
             return row.activity
+
         return key_only_activity
 
     field_names = ["activity", *attr_cols]
 
     def key_with_attrs(row: Any) -> Hashable:
         return tuple(
-            (name, _to_hashable(getattr(row, _attr_to_field(name), None)))
-            for name in field_names
+            (name, _to_hashable(getattr(row, _attr_to_field(name), None))) for name in field_names
         )
+
     return key_with_attrs
 
 
@@ -162,12 +172,23 @@ def compute_enriched_metrics(
     df: pd.DataFrame,
     *,
     exponential_k: float = 1.0,
+    basic_metrics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compute the user-requested set of measures against an EPA built
     with attribute-aware edges (EnrichedComplexity-style).
+
+    ``basic_metrics`` (the plain bundle for the same ``df``) supplies every
+    sequence-only measure - they are identical by construction, so passing
+    it halves the work. Only the EPA-derived values (entropies and
+    ``pentland_task``) are recomputed against the enriched automaton.
     """
     if df.empty or df["case_id"].nunique() == 0:
         return {}
+
+    if basic_metrics is None or not basic_metrics:
+        basic_metrics = compute_basic_metrics(df, exponential_k=exponential_k)
+        if not basic_metrics:
+            return {}
 
     # Use cleaned itertuples-friendly column names.
     df_renamed = df.rename(
@@ -179,28 +200,11 @@ def compute_enriched_metrics(
     h_var, h_var_norm = variant_entropy(states, c_index)
     h_seq, h_seq_norm = sequence_entropy(states, c_index)
     h_lin, h_lin_norm = sequence_entropy_forgetting(states, c_index, "linear")
-    h_exp, h_exp_norm = sequence_entropy_forgetting(
-        states, c_index, "exp", k=exponential_k
-    )
-
-    tl = trace_length_stats(df)
+    h_exp, h_exp_norm = sequence_entropy_forgetting(states, c_index, "exp", k=exponential_k)
 
     return {
-        "magnitude": magnitude(df),
-        "support": support(df),
-        "variety": variety(df),
-        "level_of_detail": level_of_detail(df),
-        "time_granularity_s": time_granularity(df),
-        "structure": structure(df),
-        "affinity": affinity(df),
-        "trace_length_min": tl["min"],
-        "trace_length_avg": tl["avg"],
-        "trace_length_max": tl["max"],
-        "distinct_traces_pct": pct_distinct_traces(df),
-        "deviation_from_random": deviation_from_random(df),
-        "lempel_ziv": lempel_ziv_complexity(df),
+        **{key: basic_metrics.get(key) for key in _SEQUENCE_ONLY_KEYS},
         "pentland_task": pentland_task(states),
-        "pentland_process": pentland_process(df),
         "variant_entropy": h_var,
         "normalized_variant_entropy": h_var_norm,
         "sequence_entropy": h_seq,
@@ -224,7 +228,7 @@ def compute_metrics_bundle(
     basic = compute_basic_metrics(df, exponential_k=exponential_k)
     enriched: dict[str, Any] | None = None
     if enriched_supported:
-        enriched = compute_enriched_metrics(df, exponential_k=exponential_k)
+        enriched = compute_enriched_metrics(df, exponential_k=exponential_k, basic_metrics=basic)
     return {
         "basic": basic,
         "enriched": enriched,

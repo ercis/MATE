@@ -4,14 +4,10 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 from scipy.stats import pearsonr
-from dataclasses import dataclass, asdict
-from typing import List
 
+from source.agent_types.calendar_discovery_parameters import CalendarDiscoveryParameters
 from source.agent_types.discover_calendars import discover_resource_calendars_per_profile
 from source.agent_types.roles import Resource, ResourceProfile
-from source.agent_types.calendar_discovery_parameters import CalendarDiscoveryParameters
-
-
 
 
 class _ResourcePoolDiscoverer:
@@ -84,7 +80,7 @@ class _ResourcePoolDiscoverer:
                 if rel["distance"] > self._sim_threshold and rel["x"] != rel["y"]:
                     g.add_edge(rel["x"], rel["y"], weight=rel["distance"])
             # extraction of fully connected subgraphs as roles
-            sub_graphs = list((g.subgraph(c) for c in nx.connected_components(g)))
+            sub_graphs = list(g.subgraph(c) for c in nx.connected_components(g))
             # role definition from graph
             return self._role_definition(sub_graphs)
         except ValueError:
@@ -115,13 +111,13 @@ class _ResourcePoolDiscoverer:
                 y = np.array(profile_y["profile"])
                 r_row, p_value = pearsonr(x, y)
                 correl_matrix.append(
-                    (
+                    
                         {
                             "x": profile_x[self._resource_key],
                             "y": profile_y[self._resource_key],
                             "distance": r_row,
                         }
-                    )
+                    
                 )
         return correl_matrix
 
@@ -164,7 +160,7 @@ def discover_resource_pools(log: pd.DataFrame) -> dict[str, list[str]]:
 
 def discover_pool_resource_profiles(
     event_log: pd.DataFrame, cost_per_hour: float = 20
-) -> List["ResourceProfile"]:
+) -> list["ResourceProfile"]:
     """
     Discover resource profiles grouped by pools. Discover pools of resources with the same characteristics, and
     create a resource profile per pool.

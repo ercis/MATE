@@ -10,6 +10,7 @@ const TABS = [
   { href: "/settings/general", label: "General" },
   { href: "/settings/privacy", label: "Privacy" },
   { href: "/settings/ai", label: "AI" },
+  { href: "/settings/api", label: "API & MCP" },
   { href: "/settings/about", label: "About" },
 ];
 

@@ -45,13 +45,25 @@ class SampleModule(Module):
         return result
 
     @route.get("/open-other")
-    async def open_other(self, ctx: ModuleContext, other_id: str) -> dict[str, object]:
+    async def open_other(
+        self, ctx: ModuleContext, other_id: str, only_activity: str = "", raw: bool = False
+    ) -> dict[str, object]:
         """Open a *second* log via the ownership-checked cross-log accessor and
         return its event count. Returns ``{"denied": True}`` when the accessor
         refuses (missing log or another tenant's) - lets a test prove the
-        tenant-isolation invariant on ``ctx.open_event_log``."""
+        tenant-isolation invariant on ``ctx.open_event_log``.
+
+        ``only_activity`` / ``raw`` exercise the per-call filter override: an
+        explicit list replaces the log's committed Events-tab filter for that
+        view (``raw`` sends ``[]`` - no filter at all), which is what lets one
+        module read two differently filtered views of the same log."""
+        filters: list[dict[str, object]] | None = None
+        if only_activity:
+            filters = [{"field": "activity", "op": "equals", "value": only_activity}]
+        elif raw:
+            filters = []
         try:
-            other = await ctx.open_event_log(other_id)
+            other = await ctx.open_event_log(other_id, filters)
         except PermissionError:
             return {"denied": True}
         async with other as log:

@@ -20,10 +20,15 @@ responses. Both sides initiate requests; ids are local to the initiator.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import importlib.util
 import inspect
 import json
+import os
+import signal
 import sys
+import threading
+import time
 import traceback
 from pathlib import Path
 from typing import Any
@@ -40,6 +45,20 @@ RPC_STREAM_LIMIT = 256 * 1024 * 1024  # 256 MiB
 # carrying this string for every ctx call made by a soft-cancelled job; the
 # worker turns it into `Cancelled` (below) so the handler unwinds cleanly.
 _CANCEL_RPC_MSG = "__ff_job_cancelled__"
+
+# `asyncio.create_task` only weakly references its task, so a fire-and-forget
+# task can be collected mid-flight and never finish - dropping a log line or a
+# whole inbound RPC dispatch. This file runs on the *module's* interpreter and
+# must stay stdlib-only (no `mate.api` imports), so it keeps its own reference
+# set rather than using `mate.api.tasks.spawn`.
+_BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
+
+
+def _spawn(coro: Any) -> None:
+    """Schedule *coro* and hold a strong reference until it completes."""
+    task = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
 def _resolve_cancelled() -> type[BaseException]:
@@ -63,6 +82,88 @@ def _resolve_cancelled() -> type[BaseException]:
 
 
 Cancelled = _resolve_cancelled()
+
+
+def _cache_envelope(value: Any, workdir: str) -> dict[str, Any]:
+    """Wrap a cache value for the JSON-RPC: JSON-native passes inline; anything
+    else (bytes, DataFrame, numpy, ...) is pickled to a file under the shared
+    workdir and referenced by path - the host reads it back. Mirrors
+    `ctx_rpc._cache_envelope`; the two MUST agree on the wire shape.
+
+    `ResultCache` stores bytes/DataFrames/JSON by type in-process, so a handler
+    moved to a worker must be able to cache the same values - plain JSON can't
+    carry them. The pickle only ever crosses between the platform's own host and
+    worker (same trust domain as the `run_in_process` offload pickle)."""
+    try:
+        json.dumps(value)
+        return {"kind": "json", "value": value}
+    except (TypeError, ValueError):
+        import pickle
+        import uuid
+
+        path = Path(workdir) / f"_cacheval_{uuid.uuid4().hex}.pkl"
+        path.write_bytes(pickle.dumps(value))
+        return {"kind": "pickle", "path": str(path)}
+
+
+def _cache_unenvelope(env: Any) -> Any:
+    if isinstance(env, dict) and env.get("kind") == "pickle":
+        import pickle
+
+        return pickle.loads(Path(env["path"]).read_bytes())
+    if isinstance(env, dict) and env.get("kind") == "json":
+        return env["value"]
+    return env
+
+
+def _install_parent_death_guard() -> None:
+    """Self-terminate (with our whole process group) when the API parent dies.
+
+    Inlined, stdlib-only equivalent of ``mate.api.jobs.proc_guard`` - the worker
+    runs on the *module's* venv where ``mate.api`` is not importable. The host
+    spawns us with ``start_new_session=True``, so we lead our own group
+    (``getpgrp() == getpid()``) and the API is our direct parent: ``getppid()``
+    polling detects its death reliably, and a group-kill reaps any grandchildren
+    the handler spawned (e.g. AgentSimulator's ``ProcessPoolExecutor``). Linux
+    ``PR_SET_PDEATHSIG`` is the instant fast path on top. Without this, a worker
+    wedged in a native ``to_thread`` call would keep burning a core after a hard
+    API death (SIGKILL / ``--reload`` restart / crash), since the socket-EOF
+    self-exit is delayed by ``asyncio.run`` joining that thread. Keep in sync
+    with ``proc_guard.install_parent_death_guard``.
+    """
+
+    def _kill_group_and_exit() -> None:
+        try:
+            if os.getpgrp() == os.getpid():
+                os.killpg(0, signal.SIGKILL)
+        except Exception:
+            pass
+        os._exit(137)
+
+    # Linux: kernel SIGKILLs us when the parent dies. No-op / best-effort else.
+    if sys.platform == "linux":
+        try:
+            import ctypes
+
+            ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, signal.SIGKILL, 0, 0, 0)
+        except Exception:
+            pass
+
+    original_ppid = os.getppid()
+    if original_ppid == 1:  # parent already gone (race between spawn and now)
+        _kill_group_and_exit()
+
+    def _watch() -> None:
+        while True:
+            try:
+                if os.getppid() != original_ppid:
+                    break
+            except Exception:
+                break
+            time.sleep(0.5)
+        _kill_group_and_exit()
+
+    threading.Thread(target=_watch, daemon=True, name="ff-parent-death").start()
 
 
 def _import_module(folder: Path):
@@ -148,10 +249,10 @@ class _ProxyContext:
         self.log_id: str = ctx_meta.get("log_id", "")
         self.module_id: str = ctx_meta.get("module_id", "")
         self.workdir = Path(ctx_meta.get("workdir", "/tmp"))
-        self.event_log = _EventLogProxy(conn, token)
+        self.event_log = _EventLogProxy(conn, token, ctx_meta)
         self.bus = _BusProxy(conn, token)
         self.registry = _RegistryProxy(conn, token, ctx_meta.get("capabilities"))
-        self.cache = _CacheProxy(conn, token)
+        self.cache = _CacheProxy(conn, token, ctx_meta)
         self.config = _ConfigProxy(ctx_meta.get("config", {}))
         self.progress = _ProgressProxy(conn, token)
         self.logger = _LoggerProxy(conn, token)
@@ -163,17 +264,45 @@ class _ProxyContext:
     async def check_cancelled(self) -> None:
         await self.cancellation.check_cancelled()
 
+    async def run_in_process(self, fn: Any, /, *args: Any, **kwargs: Any) -> Any:
+        # We are already the isolated, killable process; just run it (off the
+        # event loop so an async handler stays responsive to ctx RPCs). No
+        # further child-process offload - the worker itself is the kill target.
+        return await asyncio.to_thread(fn, *args, **kwargs)
+
 
 class _EventLogProxy:
-    def __init__(self, conn: WireConnection, token: str):
+    def __init__(self, conn: WireConnection, token: str, ctx_meta: dict[str, Any] | None = None):
         self._conn = conn
         self._token = token
+        self._meta = ctx_meta or {}
 
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, *exc):
         return None
+
+    # Shared-filesystem paths + committed filter, snapshotted host-side into
+    # ctx_meta so these answer locally (no round-trip), matching the real
+    # EventLogAccess surface. Absent key → not log-scoped → raise on use.
+    @property
+    def events_path(self) -> Path:
+        p = self._meta.get("events_path")
+        if p is None:
+            raise RuntimeError("ctx.event_log.events_path is unavailable (handler not log-scoped).")
+        return Path(p)
+
+    @property
+    def cases_path(self) -> Path:
+        p = self._meta.get("cases_path")
+        if p is None:
+            raise RuntimeError("ctx.event_log.cases_path is unavailable (handler not log-scoped).")
+        return Path(p)
+
+    @property
+    def active_filter(self) -> list | None:
+        return self._meta.get("active_filter")
 
     async def duckdb_fetch(self, sql: str, params: list | tuple | None = None) -> list[tuple]:
         result = await self._conn.send_request(
@@ -256,18 +385,31 @@ class _RegistryProxy:
 
 
 class _CacheProxy:
-    def __init__(self, conn: WireConnection, token: str):
+    def __init__(self, conn: WireConnection, token: str, ctx_meta: dict[str, Any] | None = None):
         self._conn = conn
         self._token = token
+        self._meta = ctx_meta or {}
+
+    @property
+    def dir(self) -> Path:
+        # The host created this dir when it built the ctx and shares the
+        # filesystem, so the worker writes/reads here directly. Files land in the
+        # real cache dir; a subsequent ctx.cache.set RPC persists the whole dir
+        # to the storage backend (host-side ResultCache.set) - same semantics as
+        # an in-thread handler.
+        d = self._meta.get("cache_dir")
+        if d is None:
+            raise RuntimeError("ctx.cache.dir is unavailable (handler not log-scoped).")
+        return Path(d)
 
     async def get(self, key: str) -> Any:
-        return await self._conn.send_request(
-            "ctx.cache.get", {"ctx_token": self._token, "key": key}
-        )
+        env = await self._conn.send_request("ctx.cache.get", {"ctx_token": self._token, "key": key})
+        return _cache_unenvelope(env)
 
     async def set(self, key: str, value: Any) -> None:
+        envelope = _cache_envelope(value, self._meta.get("workdir", "/tmp"))
         await self._conn.send_request(
-            "ctx.cache.set", {"ctx_token": self._token, "key": key, "value": value}
+            "ctx.cache.set", {"ctx_token": self._token, "key": key, "value": envelope}
         )
 
     async def exists(self, key: str) -> bool:
@@ -354,7 +496,7 @@ class _LoggerProxy:
 
     def _log(self, level: str, event: str, **kwargs: Any) -> None:
         payload = {**self._bound, **kwargs, "event": event}
-        asyncio.create_task(
+        _spawn(
             self._conn.send_request(
                 "ctx.logger.log",
                 {"ctx_token": self._token, "level": level, "payload": payload},
@@ -387,6 +529,10 @@ class WireConnection:
         self._pending: dict[int, asyncio.Future] = {}
         self._dispatcher: dict[str, Any] = {}
         self._lock = asyncio.Lock()
+        # Serialise the full write+drain so two coroutines (e.g. a dispatched
+        # reply and an outbound request fired the same tick) can't interleave
+        # their bytes on the wire and corrupt a JSON frame.
+        self._write_lock = asyncio.Lock()
 
     def register(self, method: str, fn) -> None:
         self._dispatcher[method] = fn
@@ -401,6 +547,13 @@ class WireConnection:
         for fut in self._pending.values():
             if not fut.done():
                 fut.set_exception(exc)
+                # By the time the peer dies during shutdown, the task that was
+                # awaiting this future is usually already cancelled - nobody
+                # ever retrieves the exception and asyncio logs a bare "Future
+                # exception was never retrieved" at GC. Reading it here clears
+                # that flag; a task still awaiting the future gets the
+                # exception raised as normal.
+                fut.exception()
         self._pending.clear()
 
     async def send_request(self, method: str, params: dict[str, Any]) -> Any:
@@ -414,8 +567,9 @@ class WireConnection:
 
     async def _write(self, msg: dict[str, Any]) -> None:
         line = json.dumps(msg).encode("utf-8") + b"\n"
-        self._writer.write(line)
-        await self._writer.drain()
+        async with self._write_lock:
+            self._writer.write(line)
+            await self._writer.drain()
 
     async def run(self) -> None:
         while not self._reader.at_eof():
@@ -427,7 +581,7 @@ class WireConnection:
             except json.JSONDecodeError:
                 continue
             if "method" in msg:
-                asyncio.create_task(self._dispatch(msg))
+                _spawn(self._dispatch(msg))
             else:
                 rid = msg.get("id")
                 fut = self._pending.pop(rid, None)
@@ -501,23 +655,52 @@ async def _amain(socket_path: str, module_folder: str) -> int:
 
     conn.register("call", handle_call)
     conn.register("shutdown", lambda _params: True)
+    conn.register("ping", lambda _params: True)
 
-    await conn._write({"id": None, "method": "ready", "params": {"handlers": handlers_meta}})
+    # Advertise duck-typed guidance support so the host shim only exposes a
+    # `guidance_payload` stub for modules that actually implement one (the
+    # AI/MCP path probes the instance with getattr, not the handler walk).
+    guidance_meta = None
+    if callable(getattr(instance, "guidance_payload", None)):
+        guidance_meta = {
+            "system_prompt": getattr(instance, "guidance_system_prompt", None),
+            "user_prefix": getattr(instance, "guidance_user_prefix", None),
+        }
+    await conn._write(
+        {
+            "id": None,
+            "method": "ready",
+            # `protocol` versions the wire contract (modules/PROTOCOL.md §1);
+            # the host rejects workers speaking a newer protocol than it knows.
+            "params": {"protocol": 1, "handlers": handlers_meta, "guidance": guidance_meta},
+        }
+    )
     await conn.run()
     writer.close()
-    try:
+    with contextlib.suppress(Exception):
         await writer.wait_closed()
-    except Exception:
-        pass
     return 0
 
 
 def main() -> None:
-    if len(sys.argv) != 3:
-        print("usage: subprocess_worker.py <socket_path> <module_folder>", file=sys.stderr)
+    if len(sys.argv) not in (3, 4):
+        print(
+            "usage: subprocess_worker.py <socket_path> <module_folder> [site_packages]",
+            file=sys.stderr,
+        )
         sys.exit(2)
     socket_path = sys.argv[1]
     module_folder = sys.argv[2]
+    # `isolation: subprocess` runs under the module's own venv python (3 args).
+    # An in-process module's `execution: worker` job runs under the *platform*
+    # python (so inherited platform deps resolve) and passes its venv
+    # site-packages (4th arg) so the module's own deps import too - the same
+    # layered-path model as `ctx.run_in_process` offload.
+    site_packages = sys.argv[3] if len(sys.argv) == 4 else None
+    # Die with the platform: no worker may outlive a hard API death as an orphan.
+    _install_parent_death_guard()
+    if site_packages and os.path.isdir(site_packages):
+        sys.path.insert(0, site_packages)
     # Make the module folder importable for relative `from .x import y`.
     sys.path.insert(0, module_folder)
     raise SystemExit(asyncio.run(_amain(socket_path, module_folder)))

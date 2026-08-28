@@ -166,7 +166,9 @@ The upstream paper code under [approaches/object_detection/](approaches/object_d
 - **No filesystem walking.** Entry point takes an already-loaded DataFrame and returns results in memory.
 - **Single-log scope.** No train/eval batch concept – each call encodes one log into one similarity-matrix image.
 - **No `matplotlib` / `scipy`.** Viridis colormap inlined as a LUT; cosine distance computed with NumPy.
-- **XES re-import fallback.** When the original XES file is on disk, the loader uses pm4py with `TIMESTAMP_SORT=True` to reproduce the reference repo's trace order exactly. For CSV-imported logs it falls back to a stable `(timestamp, case_id)` sort.
+- **Trace order is derived from the platform's event frame, not re-imported from XES.** WINSIM windows by trace count, so the trace order is the image's x-axis. The reference gets it from pm4py's `TIMESTAMP_SORT=True`; the module reproduces the same order with a stable `(timestamp, case_id)` sort over `events.parquet` (which is *stored* `(case_id, timestamp)`-sorted – reading it in row order would give alphabetical trace order and scramble every window).
+
+  An earlier version re-imported `original.xes` through pm4py to match the reference's tie-breaking byte-for-byte. That was removed: pm4py's iterparse stamps the local wall-clock as UTC, so reported drift timestamps were shifted by the log's UTC offset (1–3 h on real logs); it bypassed the user's applied Events-tab filter and cell edits; it silently dropped non-`complete` lifecycle events; and it only fired for XES logs on local disk, so the same log yielded different detections depending on source format and cache state (S3 deploys never hydrate `original.*`). Tie-breaking among traces that share a start timestamp now follows `case_id` instead of XES file order – on the BPI-2020 logs this moves ~5 % of traces by one window.
 
 ---
 

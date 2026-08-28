@@ -3,7 +3,6 @@ name: Sample Module
 version: 0.1.0
 category: foundation
 description: Test fixture module – exercises @route and @on_event without any extra deps.
-author: Tests
 license: MIT
 
 requirements:

@@ -55,9 +55,7 @@ def _route_factory(method: HttpMethod) -> Callable[..., Callable[[Callable], Cal
         def deco(fn: Callable) -> Callable:
             existing = getattr(fn, _ATTR_ROUTE, None)
             if existing is not None:
-                raise RuntimeError(
-                    f"@route already applied to {fn.__qualname__}: {existing!r}"
-                )
+                raise RuntimeError(f"@route already applied to {fn.__qualname__}: {existing!r}")
             setattr(fn, _ATTR_ROUTE, spec)
             return fn
 
@@ -70,11 +68,21 @@ def _route_factory(method: HttpMethod) -> Callable[..., Callable[[Callable], Cal
 class _RouteNamespace:
     """Namespaced API: `@route.get("/x")`, `@route.post("/y")`, ..."""
 
-    get: Callable[..., Callable[[Callable], Callable]] = field(default_factory=lambda: _route_factory("GET"))
-    post: Callable[..., Callable[[Callable], Callable]] = field(default_factory=lambda: _route_factory("POST"))
-    put: Callable[..., Callable[[Callable], Callable]] = field(default_factory=lambda: _route_factory("PUT"))
-    patch: Callable[..., Callable[[Callable], Callable]] = field(default_factory=lambda: _route_factory("PATCH"))
-    delete: Callable[..., Callable[[Callable], Callable]] = field(default_factory=lambda: _route_factory("DELETE"))
+    get: Callable[..., Callable[[Callable], Callable]] = field(
+        default_factory=lambda: _route_factory("GET")
+    )
+    post: Callable[..., Callable[[Callable], Callable]] = field(
+        default_factory=lambda: _route_factory("POST")
+    )
+    put: Callable[..., Callable[[Callable], Callable]] = field(
+        default_factory=lambda: _route_factory("PUT")
+    )
+    patch: Callable[..., Callable[[Callable], Callable]] = field(
+        default_factory=lambda: _route_factory("PATCH")
+    )
+    delete: Callable[..., Callable[[Callable], Callable]] = field(
+        default_factory=lambda: _route_factory("DELETE")
+    )
 
 
 route = _RouteNamespace()

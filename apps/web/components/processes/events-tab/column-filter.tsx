@@ -17,9 +17,19 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useColumnValues } from "@/lib/queries";
-import { formatNumber } from "@/lib/format";
+import { formatNumber, toLocalInputString, toNaiveUtcString } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import type { ColumnSpec, FilterEntry, FilterOp } from "@/lib/api-types";
+
+/** A persisted datetime filter value is a naive-UTC literal (what DuckDB
+ * compares against the stored naive-UTC column). The datetime-local input is
+ * local wall-clock, so convert when seeding it. */
+function toDatetimeInputValue(raw: unknown): string {
+  const s = String(raw);
+  // Naive literal = UTC components; suffix it so Date.parse reads it as UTC.
+  const ms = Date.parse(/(Z|[+-]\d\d:?\d\d)$/.test(s) ? s : `${s}Z`);
+  return Number.isNaN(ms) ? s : toLocalInputString(ms);
+}
 
 // Single-value operators offered in the "Advanced" section. The Excel-style
 // value checklist above them covers the common "pick these values" case via
@@ -82,7 +92,9 @@ export function ColumnFilter({
   const [op, setOp] = useState<FilterOp>(advancedActive ? current!.op : ops[0]);
   const [opValue, setOpValue] = useState<string>(
     advancedActive && current!.value !== undefined && current!.value !== null
-      ? String(current!.value)
+      ? column.type === "datetime"
+        ? toDatetimeInputValue(current!.value)
+        : String(current!.value)
       : "",
   );
 
@@ -347,5 +359,11 @@ function castValue(raw: string, column: ColumnSpec): string | number | boolean |
     return Number.isFinite(n) ? n : raw;
   }
   if (column.type === "boolean") return raw === "true";
+  if (column.type === "datetime") {
+    // datetime-local gives *local* wall-clock; the stored column is naive UTC,
+    // so send the instant's UTC components (inverse of toDatetimeInputValue).
+    const ms = Date.parse(raw);
+    return Number.isNaN(ms) ? raw : toNaiveUtcString(ms);
+  }
   return raw;
 }

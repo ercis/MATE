@@ -40,11 +40,16 @@ export function DashboardFilterBar({
   logId,
   columns,
   filters,
+  compact = false,
   onChange,
 }: {
   logId: string;
   columns: ColumnSpec[];
   filters: FilterEntry[];
+  /** Thin-strip variant for the module-panel shell (`LogFilterProvider`), where
+   * the bar is chrome above the panel rather than the board's own control
+   * surface. Same controls, less padding. Dashboards leave it off. */
+  compact?: boolean;
   onChange: (next: FilterEntry[]) => void;
 }) {
   const [editingField, setEditingField] = useState<string | null>(null);
@@ -67,7 +72,12 @@ export function DashboardFilterBar({
   }, [columns, activeFields, search]);
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5 border-b border-border bg-card/40 px-3 py-2">
+    <div
+      className={cn(
+        "flex flex-wrap items-center border-b border-white/10 bg-card/40 backdrop-blur-md",
+        compact ? "gap-1 px-2 py-1" : "gap-1.5 px-3 py-2",
+      )}
+    >
       <Filter className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
 
       {filters.length === 0 && !editingField && (
@@ -88,7 +98,7 @@ export function DashboardFilterBar({
               current={f}
               onChange={(next) => setColumnFilter(f.field, next)}
             >
-              <button type="button" className="px-2 py-1 hover:bg-muted">
+              <button type="button" className={cn("hover:bg-muted", compact ? "px-1.5 py-0.5" : "px-2 py-1")}>
                 <span className="font-medium">{col.label}</span>{" "}
                 <span className="text-muted-foreground">{summarize(f)}</span>
               </button>
@@ -96,7 +106,10 @@ export function DashboardFilterBar({
             <button
               type="button"
               aria-label={`Remove ${col.label} filter`}
-              className="border-l border-border px-1 py-1 text-muted-foreground hover:bg-muted hover:text-destructive"
+              className={cn(
+                "border-l border-border px-1 text-muted-foreground hover:bg-muted hover:text-destructive",
+                compact ? "py-0.5" : "py-1",
+              )}
               onClick={() => setColumnFilter(f.field, null)}
             >
               <X className="h-3 w-3" />
@@ -120,7 +133,10 @@ export function DashboardFilterBar({
         >
           <button
             type="button"
-            className="rounded-md border border-dashed border-primary/60 px-2 py-1 text-xs text-primary"
+            className={cn(
+              "rounded-md border border-dashed border-primary/60 text-xs text-primary",
+              compact ? "px-1.5 py-0.5" : "px-2 py-1",
+            )}
           >
             {colByName.get(editingField)!.label}…
           </button>
@@ -129,7 +145,12 @@ export function DashboardFilterBar({
 
       <Popover open={addOpen} onOpenChange={setAddOpen}>
         <PopoverTrigger asChild>
-          <Button type="button" variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className={cn("gap-1 px-2 text-xs", compact ? "h-6" : "h-7")}
+          >
             <Plus className="h-3 w-3" />
             Add filter
           </Button>
@@ -179,7 +200,7 @@ export function DashboardFilterBar({
           type="button"
           variant="ghost"
           size="sm"
-          className="ml-auto h-7 px-2 text-xs text-muted-foreground"
+          className={cn("ml-auto px-2 text-xs text-muted-foreground", compact ? "h-6" : "h-7")}
           onClick={() => onChange([])}
         >
           Clear all

@@ -1,0 +1,130 @@
+id: performance_over_time
+name: Performance Over Time
+version: 1.0.0
+category: advanced
+description: >-
+  Tracks how process performance changes over time. It splits the log into
+  time slices and computes the performance module's KPIs (cycle times,
+  throughput) on each one, then plots the trend so you can see when the
+  process sped up or slowed down.
+about: >-
+  Track whether your process is getting faster or slower: this module splits the
+  log into time slices, computes the performance KPIs (cycle times, throughput,
+  lead time) on each slice, and plots the trend. Use it to verify that an
+  improvement initiative actually moved the numbers, or to catch a gradual
+  slowdown before it becomes a backlog.
+keywords: ["performance", "over time", "trend", "cycle time", "throughput", "drift", "kpi", "time series"]
+license: MIT
+default_enabled: true
+# Runs entirely locally – safe to use against confidential event logs.
+isConfidentialSafe: true
+
+requirements:
+  event_log:
+    # Case-centric: runs on a classic event log (one case per trace). Never
+    # appears for object-centric (OCEL) logs.
+    log_model: case_centric
+    required_columns:
+      - case_id
+      - activity
+      - timestamp
+    min_events: 50
+    min_cases: 2
+
+provides:
+  - performance_over_time.timeseries
+
+consumes:
+  - log.imported
+
+dependencies:
+  python:
+    requires-python: ">=3.12"
+    packages: []
+    inherit:
+      - pm4py
+      - pandas
+      - duckdb
+    isolation: in_process
+
+frontend:
+  panel: ./panel/index.tsx
+  widgets:
+    - id: perf-trend
+      entry: ./widgets/PerfTrend.tsx
+      title: Performance trend
+      description: A performance metric plotted over evenly-sized time slices.
+      icon: TrendingUp
+      default_w: 4
+      default_h: 8
+      min_w: 3
+      min_h: 6
+      config_schema:
+        properties:
+          metric:
+            type: string
+            title: Metric
+            description: Which performance measure to plot over time.
+            default: avg_cycle_time_s
+            enum:
+              - avg_cycle_time_s
+              - median_cycle_time_s
+              - p90_cycle_time_s
+              - p95_cycle_time_s
+              - min_cycle_time_s
+              - max_cycle_time_s
+              - throughput_cases_per_day
+              - lead_time_s
+            enumLabels:
+              - Avg cycle time
+              - Median cycle time
+              - P90 cycle time
+              - P95 cycle time
+              - Min cycle time
+              - Max cycle time
+              - Throughput (cases/day)
+              - Lead time
+            ui:
+              widget: select
+          slices:
+            type: integer
+            title: Time slices
+            description: Number of equal-duration bins the timeline is split into.
+            minimum: 4
+            maximum: 50
+            step: 1
+            default: 12
+            ui:
+              widget: slider
+      min_px_w: 320
+      min_px_h: 220
+      help:
+        what: "How process performance changes over time."
+        read: "A rising cycle time with flat volume points at a capacity or process problem rather than simply more work."
+        computed: "Performance measures recomputed per time slice."
+permissions:
+  - read:event_log
+  - write:module_results
+
+config_schema:
+  properties:
+    default_slices:
+      type: integer
+      title: Default number of slices
+      description: Default slice count for Absolute mode (timeline split into N equal-duration bins).
+      minimum: 2
+      maximum: 2000
+      default: 50
+      ui:
+        widget: number
+        affects: compute
+    min_cases_per_slice:
+      type: integer
+      title: Minimum cases per slice
+      description: Slices containing fewer cases than this render as a gap (null point) instead of a noisy metric.
+      minimum: 1
+      maximum: 1000
+      default: 1
+      ui:
+        widget: number
+        affects: compute

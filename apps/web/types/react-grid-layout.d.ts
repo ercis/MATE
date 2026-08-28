@@ -36,6 +36,9 @@ declare module "react-grid-layout" {
     draggableHandle?: string;
     compactType?: "vertical" | "horizontal" | null;
     droppingItem?: { i: string; w: number; h: number };
+    /** Scale factor of a CSS `transform: scale()` ancestor, so RGL divides
+     * pointer deltas back into layout pixels (canvas zoom). */
+    transformScale?: number;
     onLayoutChange?: (layout: Layout[]) => void;
     // `item` is undefined when RGL tears down its dropping placeholder before the
     // drop lands (its HTML5 droppable is racy) — callers must tolerate it.

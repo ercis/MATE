@@ -17,8 +17,53 @@
 export { useWidget } from "@/lib/module-widgets";
 export type { WidgetProps } from "@/lib/module-widgets";
 
-// Per-(user, log, module) layout persistence (§7.7).
-export { useModuleLayout, useSaveModuleLayout } from "@/lib/module-layout";
+// The shared widget kit — build cards from these rather than a private
+// `_kit.tsx`, so every module's cards read as one product (§7 Widgets).
+export {
+  CardShell,
+  CardEmpty,
+  CardError,
+  CardSection,
+  KpiTile,
+  KpiGrid,
+  InfoHint,
+  WidgetHelpBody,
+  hasHelp,
+  SERIES_SLOTS,
+  SERIES_COLORS,
+  SEQUENTIAL_STEPS,
+  CHART_CHROME,
+  seriesColor,
+  sequentialScale,
+  divergingScale,
+  statusColor,
+  type StatusRole,
+} from "@/components/dashboards/kit";
+
+// Drill-down: navigating from a card to the page behind a number.
+// `variantHref`/`activityHref` are the canonical entity views — link variants
+// and activities there (with `next/link`) wherever a module renders them.
+export {
+  DRILL_PARAMS,
+  resolveDrillHref,
+  drillLabel,
+  modulePath,
+  variantHref,
+  activityHref,
+  useDrillParams,
+} from "@/lib/dashboards/drill";
+export type { DrillTarget, DrillHandler } from "@/lib/dashboards/drill";
+
+// Which settings bucket a rendered visualization reads/writes. A widget that
+// builds its own settings provider should resolve its scope as
+// `props.scope ?? useCardScope() ?? panelScope(moduleId)` so the same component
+// works both on a dashboard card and inside the module's panel.
+export {
+  useCardScope,
+  cardScope,
+  panelScope,
+  isCardScope,
+} from "@/lib/dashboards/card-scope";
 
 // HTTP + WS client primitives.
 export { api, rawFetch, ApiError, wsUrl } from "@/lib/api";

@@ -17,6 +17,10 @@ import { usePathname, useSearchParams } from "next/navigation";
 
 const startListeners = new Set<() => void>();
 
+// A navigation faster than this never shows the bar (pre-warmed routes resolve in
+// ~tens of ms). Only genuinely slow navigations cross the threshold and show it.
+const SHOW_DELAY_MS = 180;
+
 /** Imperatively begin the bar – for programmatic `router.push` navigations. */
 export const routeProgress = {
   start() {
@@ -34,10 +38,20 @@ export function RouteProgress() {
   const trickle = useRef<ReturnType<typeof setInterval> | null>(null);
   const safety = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hide = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Defer showing the bar: a fast (pre-warmed) nav resolves before this fires, so
+  // the bar never flashes. `shownRef` tracks whether it actually became visible.
+  const show = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const shownRef = useRef(false);
 
   const finish = useCallback(() => {
     if (!activeRef.current) return;
     activeRef.current = false;
+    // Nav resolved before the show-delay elapsed → the bar never appeared, so
+    // there's nothing to flash. This is the common case for pre-warmed routes.
+    if (show.current) {
+      clearTimeout(show.current);
+      show.current = null;
+    }
     if (trickle.current) {
       clearInterval(trickle.current);
       trickle.current = null;
@@ -46,10 +60,12 @@ export function RouteProgress() {
       clearTimeout(safety.current);
       safety.current = null;
     }
+    if (!shownRef.current) return;
     setProgress(100);
     hide.current = setTimeout(() => {
       setVisible(false);
       setProgress(0);
+      shownRef.current = false;
     }, 250);
   }, []);
 
@@ -60,12 +76,16 @@ export function RouteProgress() {
       clearTimeout(hide.current);
       hide.current = null;
     }
-    setVisible(true);
-    setProgress(8);
-    // Ease toward 90% – never reach 100 until the route actually resolves.
-    trickle.current = setInterval(() => {
-      setProgress((p) => (p >= 90 ? 90 : p + (90 - p) * 0.12));
-    }, 200);
+    // Only reveal the bar if the nav is still pending after the delay.
+    show.current = setTimeout(() => {
+      shownRef.current = true;
+      setVisible(true);
+      setProgress(8);
+      // Ease toward 90% – never reach 100 until the route actually resolves.
+      trickle.current = setInterval(() => {
+        setProgress((p) => (p >= 90 ? 90 : p + (90 - p) * 0.12));
+      }, 200);
+    }, SHOW_DELAY_MS);
     safety.current = setTimeout(finish, 8000);
   }, [finish]);
 
@@ -116,6 +136,7 @@ export function RouteProgress() {
   // Clean up timers on unmount.
   useEffect(() => {
     return () => {
+      if (show.current) clearTimeout(show.current);
       if (trickle.current) clearInterval(trickle.current);
       if (safety.current) clearTimeout(safety.current);
       if (hide.current) clearTimeout(hide.current);

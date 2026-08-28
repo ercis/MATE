@@ -17,6 +17,7 @@ import duckdb
 
 from mate.api.ingest.storage import log_paths
 from mate.api.modules.event_filters import quote_ident as _quote_ident
+from mate.api.storage import eviction
 from mate.api.storage import sync as storage_sync
 
 # DuckDB view name → the LogPaths attribute holding its parquet.
@@ -41,14 +42,25 @@ class ObjectCentricLogAccess:
         self.user_id = user_id
         self._paths = log_paths(log_id, user_id)
         self._conn: duckdb.DuckDBPyConnection | None = None
+        # Pins the log dir against the S3 cache reaper for the read's lifetime.
+        self._lease: str | None = None
 
     async def __aenter__(self) -> ObjectCentricLogAccess:
-        # In S3 mode, pull the log dir from the bucket if the local cache is cold.
-        await storage_sync.hydrate_log(self.user_id, self.log_id)
-        if not self._paths.ocel_events.exists():
-            raise FileNotFoundError(
-                f"OCEL log {self.log_id} has no ocel/events.parquet - import not finished?"
-            )
+        # Lease before hydrate so the reaper can't evict the tree mid-read.
+        self._lease = await eviction.acquire_lease_async(self._paths.root)
+        try:
+            # In S3 mode, pull the log dir from the bucket if the cache is cold.
+            await storage_sync.hydrate_log(self.user_id, self.log_id)
+            if not self._paths.ocel_events.exists():
+                raise FileNotFoundError(
+                    f"OCEL log {self.log_id} has no ocel/events.parquet - import not finished?"
+                )
+        except BaseException:
+            # Lease was just acquired above; release it on any entry failure so a
+            # __aexit__ that never runs can't strand it.
+            eviction.release_lease(self._lease)
+            self._lease = None
+            raise
         return self
 
     async def __aexit__(self, *exc: object) -> None:
@@ -56,6 +68,9 @@ class ObjectCentricLogAccess:
             with contextlib.suppress(Exception):
                 self._conn.close()
             self._conn = None
+        if self._lease is not None:
+            eviction.release_lease(self._lease)
+            self._lease = None
 
     @property
     def events_path(self) -> Path:

@@ -75,11 +75,30 @@ def align_for_metrics(df: pd.DataFrame) -> pd.DataFrame:
     if "time:timestamp" in df.columns and "end_time" not in df.columns:
         df = df.rename(columns={"time:timestamp": "end_time"})
 
-    df["start_time"] = pd.to_datetime(df["start_time"], utc=True, format="mixed")
-    df["end_time"] = pd.to_datetime(df["end_time"], utc=True, format="mixed")
+    # Coerce defensively (`errors="coerce"`): an unparsable cell must degrade its
+    # own row, never raise. `compute_fidelity` calls this *outside* its per-measure
+    # guard, so a single bad timestamp would otherwise crash the whole scoring pass
+    # and wipe all five measures at once.
+    df["start_time"] = pd.to_datetime(df["start_time"], utc=True, format="mixed", errors="coerce")
+    # `end` falls back to `start` when the column is absent, or a value is
+    # missing/unparsable. Single-timestamp logs - the *simulated output* included -
+    # carry no usable end, and the gap-fill in build_input_csv only rewrites the
+    # real log fed to the simulator. Mirroring adapter._normalize here means the
+    # simulated durations are handled exactly like the real log's; without it a
+    # NaT end NaNs out every case duration and silently drops CTDD/AEDD/REDD,
+    # collapsing the time-based fidelity scores to nothing.
+    if "end_time" in df.columns:
+        df["end_time"] = pd.to_datetime(
+            df["end_time"], utc=True, format="mixed", errors="coerce"
+        ).fillna(df["start_time"])
+    else:
+        df["end_time"] = df["start_time"]
     if "resource" not in df.columns:
         df["resource"] = "undefined"
     df = df[df["activity"].astype(str) != "zzz_end"]
+    # Drop only rows we genuinely can't place in time (missing start); a missing
+    # end already fell back to start above. Mirrors adapter._normalize.
+    df = df.dropna(subset=["start_time"])
     return df.reset_index(drop=True)
 
 

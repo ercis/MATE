@@ -3,7 +3,10 @@
 import { create } from "zustand";
 
 interface UiState {
-  sidebarCollapsed: boolean;
+  // Left nav sidebar. `false` (default) = auto mode: retracted rail that
+  // expands while the cursor is over it. `true` = locked maximized (pinned
+  // open regardless of hover). The transient hover state is component-local.
+  sidebarPinned: boolean;
   showUnavailableModules: boolean;
   showDisabledModules: boolean;
   // When on, only modules that declare `isConfidentialSafe: true` in their
@@ -18,8 +21,11 @@ interface UiState {
   dateFormat: "iso" | "us" | "eu";
   csvDelimiter: "," | ";" | "\t" | "|";
   csvTimestampFormat: string;
-  toggleSidebar: () => void;
-  setSidebarCollapsed: (v: boolean) => void;
+  // Topbar back-arrow behavior (Settings → General). "history" (default) =
+  // router.back(); "parent" = up one level in the breadcrumb hierarchy.
+  backButtonMode: "history" | "parent";
+  toggleSidebarPinned: () => void;
+  setSidebarPinned: (v: boolean) => void;
   setShowUnavailableModules: (v: boolean) => void;
   setShowDisabledModules: (v: boolean) => void;
   setConfidentialOnly: (v: boolean) => void;
@@ -30,6 +36,7 @@ interface UiState {
   setDateFormat: (v: "iso" | "us" | "eu") => void;
   setCsvDelimiter: (v: "," | ";" | "\t" | "|") => void;
   setCsvTimestampFormat: (v: string) => void;
+  setBackButtonMode: (v: "history" | "parent") => void;
   // Replace the data slice with a server blob merged over defaults. Used by
   // the per-user server-state sync (see `lib/server-persist.ts`).
   hydrate: (data: Record<string, unknown>) => void;
@@ -46,7 +53,7 @@ const DEFAULT_TIMEZONE = (() => {
 /** Data defaults (no actions). Spread into the store and used to reset on
  *  account switch so one user's prefs never leak into another's session. */
 export const UI_DEFAULTS = {
-  sidebarCollapsed: false,
+  sidebarPinned: false,
   showUnavailableModules: true,
   showDisabledModules: false,
   confidentialOnly: false,
@@ -56,12 +63,13 @@ export const UI_DEFAULTS = {
   dateFormat: "iso" as const,
   csvDelimiter: "," as const,
   csvTimestampFormat: "",
+  backButtonMode: "history" as const,
 };
 
 export const useUi = create<UiState>((set) => ({
   ...UI_DEFAULTS,
-  toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
-  setSidebarCollapsed: (v) => set({ sidebarCollapsed: v }),
+  toggleSidebarPinned: () => set((s) => ({ sidebarPinned: !s.sidebarPinned })),
+  setSidebarPinned: (v) => set({ sidebarPinned: v }),
   setShowUnavailableModules: (v) => set({ showUnavailableModules: v }),
   setShowDisabledModules: (v) => set({ showDisabledModules: v }),
   setConfidentialOnly: (v) => set({ confidentialOnly: v }),
@@ -72,5 +80,6 @@ export const useUi = create<UiState>((set) => ({
   setDateFormat: (v) => set({ dateFormat: v }),
   setCsvDelimiter: (v) => set({ csvDelimiter: v }),
   setCsvTimestampFormat: (v) => set({ csvTimestampFormat: v }),
+  setBackButtonMode: (v) => set({ backButtonMode: v }),
   hydrate: (data) => set({ ...UI_DEFAULTS, ...(data as Partial<UiState>) }),
 }));

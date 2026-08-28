@@ -5,9 +5,36 @@ category: advanced
 description: >-
   Detects when and how your process changed. It encodes the log as a similarity
   image and uses a trained object-detection model to find sudden, gradual,
-  incremental, and recurring drifts.
+  incremental, and recurring drifts. Based on Kraus and van der Aa, "Looking for
+  Change: A Computer Vision Approach for Concept Drift Detection in Process
+  Mining" (2024). DOI: https://doi.org/10.1007/978-3-031-70396-6_16
+about: >-
+  Find out when your process changed: this module encodes the log as a
+  similarity image and runs a trained object-detection model over it to locate
+  sudden, gradual, incremental, and recurring drifts. Use it to pin down the
+  time window of each change, distinguish one-off shifts from recurring
+  patterns, and pick the right periods to compare before and after.
 keywords: ["concept drift", "drift detection", "drift", "sudden drift", "gradual drift", "recurring drift", "change point"]
-author: A. Kraus and H. van der Aa
+source:
+  # The extended manuscript this module ports (see `original README.md`).
+  - title: >-
+      Machine learning-based detection of concept drifts in business processes
+    fullCitation: >-
+      A. Kraus and H. van der Aa, "Machine learning-based detection of concept
+      drifts in business processes," manuscript submitted to the BPM'24 special
+      collection of Process Science, 2024
+  # The conference paper it extends - this is what the DOI resolves to.
+  - title: >-
+      Looking for change: A computer vision approach for concept drift
+      detection in process mining
+    fullCitation: >-
+      A. Kraus and H. van der Aa, "Looking for change: A computer vision
+      approach for concept drift detection in process mining," in Proc. BPM,
+      Springer, 2024
+    url: https://doi.org/10.1007/978-3-031-70396-6_16
+artifacts:
+  - name: cv4cdd training dataset (Hugging Face)
+    url: https://huggingface.co/datasets/pm-science/cv4cdd_4d
 license: CC-BY-4.0
 default_enabled: true
 # Runs entirely locally – safe to use against confidential event logs.
@@ -55,18 +82,23 @@ dependencies:
       - numpy
       - duckdb
     isolation: in_process
+    # Run each precompute job in a throwaway killable child process so a Cancel
+    # (or platform shutdown) actually stops it - this module's native TF / Java /
+    # multiprocessing.Pool work runs in that child's process group, not the API's.
+    execution: worker
 
 frontend:
   panel: ./panel/index.tsx
+  log_filter: false
   widgets:
     - id: drift-detections
       entry: ./widgets/DriftDetections.tsx
       title: CV drift detections
       description: Computer-vision-detected concept drifts with type and confidence.
       icon: AlertTriangle
-      default_w: 5
+      default_w: 3
       default_h: 8
-      min_w: 5
+      min_w: 3
       min_h: 6
       config_schema:
         properties:
@@ -80,6 +112,20 @@ frontend:
             default: 0
             ui:
               widget: slider
+      min_px_w: 300
+      min_px_h: 220
+      help:
+        what: "Points in time where the process appears to change."
+        read: "A detection marks WHEN behaviour shifted, not what changed — use the drift explainer for that."
+        computed: "Detected by the configured computer-vision drift model over the log's time series."
+# Data-only output for the platform's generic visualization layer.
+datasets:
+  - id: detections
+    title: Drift detections
+    description: Computer-vision-detected concept drifts with type and confidence.
+    icon: AlertTriangle
+    shape: table
+    route: /results
 
 permissions:
   - read:event_log

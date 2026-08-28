@@ -1,10 +1,12 @@
 # taken from https://github.com/AutomatedProcessImprovement/Prosimos/blob/main/bpdfr_discovery/log_parser.py#L331
 
-from source.agent_types.factory import CalendarFactory
-from source.agent_types.calendar_discovery_parameters import CalendarDiscoveryParameters
-
 import datetime
+
 import pytz
+
+from source.agent_types.calendar_discovery_parameters import CalendarDiscoveryParameters
+from source.agent_types.factory import CalendarFactory
+
 
 def discover_calendar_per_agent(df):
     params = CalendarDiscoveryParameters

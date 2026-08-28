@@ -1,5 +1,5 @@
-from dataclasses import dataclass, asdict
-from typing import List
+from dataclasses import asdict, dataclass
+
 
 @dataclass
 class Resource:
@@ -10,7 +10,7 @@ class Resource:
     amount: int
     cost_per_hour: float
     calendar_id: str
-    assigned_tasks: List[str]
+    assigned_tasks: list[str]
 
     @staticmethod
     def from_dict(resource: dict) -> "Resource":
@@ -30,7 +30,7 @@ class ResourceProfile:
 
     id: str
     name: str
-    resources: List[Resource]
+    resources: list[Resource]
 
     def to_dict(self) -> dict:
         """Dictionary with the structure compatible with Prosimos:"""

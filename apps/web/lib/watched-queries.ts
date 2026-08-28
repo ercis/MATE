@@ -6,7 +6,6 @@ import { api } from "@/lib/api";
 import { queryKeys } from "@/lib/queries";
 import type {
   ScanResponse,
-  WatchedFolderCreatePayload,
   WatchedFolderDetail,
   WatchedFolderSummary,
   WatchedFolderUpdatePayload,
@@ -29,18 +28,6 @@ export function useWatchedFolder(id: string | null) {
     queryKey: id ? watchedKeys.detail(id) : ["watched-folders", "noop"],
     queryFn: () => api<WatchedFolderDetail>(`/api/v1/watched-folders/${id}`),
     enabled: Boolean(id),
-  });
-}
-
-export function useCreateWatchedFolder() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (input: WatchedFolderCreatePayload) =>
-      api<WatchedFolderSummary>("/api/v1/watched-folders", { method: "POST", json: input }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: watchedKeys.all() });
-      qc.invalidateQueries({ queryKey: queryKeys.folders() });
-    },
   });
 }
 

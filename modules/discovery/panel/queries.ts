@@ -1,11 +1,13 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { api, rawFetch } from "@/lib/api";
 import type {
   BpmnData,
   DfgData,
+  DfgLayoutRequest,
+  DfgLayoutResponse,
   PetriNetData,
   PrefixTreeData,
   ProcessTreeData,
@@ -69,11 +71,14 @@ export function useDiscoveryPetriAlphaPlus(logId: string) {
   });
 }
 
-export function useDiscoveryPetriIlp(logId: string) {
+// ILP is opt-in: it never runs on mount alongside the other miners. The LP
+// solve per causal relation is heavy (and has OOM-crashed when run eagerly),
+// so the caller passes `enabled` only once the user explicitly selects it.
+export function useDiscoveryPetriIlp(logId: string, enabled: boolean) {
   return useQuery<PetriNetData>({
     queryKey: ["modules", "discovery", "petri-ilp", logId],
     queryFn: () => api<PetriNetData>(discoveryUrl("/petri-net/ilp", logId)),
-    enabled: Boolean(logId),
+    enabled: Boolean(logId) && enabled,
     staleTime: STALE_TIME,
   });
 }
@@ -154,6 +159,53 @@ export async function downloadBpmn(logId: string): Promise<void> {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+/** FNV-1a over the request graph — keeps the query key short and stable. */
+function layoutRequestKey(request: DfgLayoutRequest): string {
+  const canonical = JSON.stringify({
+    n: request.nodes.map((n) => `${n.id}:${n.width}x${n.height}`).sort(),
+    e: request.edges.map(([s, t]) => `${s}>${t}`).sort(),
+    s: request.start_id,
+    t: request.end_id,
+    p: request.params ?? {},
+  });
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < canonical.length; i++) {
+    hash ^= canonical.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16);
+}
+
+/**
+ * Server-side layout for the visible DFG subgraph (POST /dfg/layout).
+ *
+ * `keepPreviousData`: a slider tweak refetches with new nodes — the previous
+ * geometry stays rendered until the fresh one lands, so the canvas morphs
+ * instead of flashing a skeleton. The server caches by graph digest, so
+ * repeat requests are near-instant.
+ */
+export function useDfgServerLayout(logId: string, request: DfgLayoutRequest | null) {
+  return useQuery<DfgLayoutResponse>({
+    queryKey: [
+      "modules",
+      "discovery",
+      "dfg-layout",
+      logId,
+      request?.algorithm ?? "",
+      request ? layoutRequestKey(request) : "",
+    ],
+    queryFn: () =>
+      api<DfgLayoutResponse>(discoveryUrl("/dfg/layout", logId), {
+        method: "POST",
+        json: request,
+      }),
+    enabled: Boolean(logId) && request !== null && request.nodes.length > 0,
+    staleTime: STALE_TIME,
+    placeholderData: keepPreviousData,
+    retry: 1,
+  });
 }
 
 export interface HeuristicsThresholds {

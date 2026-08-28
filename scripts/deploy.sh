@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# Local push-to-deploy for the uni VM (pm-mate.uni-muenster.de).
+# Local push-to-deploy for the deploy VM.
 #
-# Run this from your laptop **while connected to the department dev VPN** – the
-# VM's SSH port is only reachable through the VPN. It:
+# Run this from your laptop **while connected to the dev VPN** – the VM's SSH
+# port is only reachable through it. It:
 #   1. pushes the current branch to GitHub,
 #   2. SSHes into the VM, updates the deploy clone to match origin, and
 #      rebuilds + restarts the stack,
@@ -13,9 +13,8 @@
 #   ./scripts/deploy.sh              # push current branch, then deploy
 #   ./scripts/deploy.sh --no-push    # skip the push, just redeploy origin's state
 #
-# The VM's hostname, SSH port and login are NOT in this repo - it is public.
-# Put them in scripts/deploy.env (gitignored; copy scripts/deploy.env.example),
-# or export them yourself:
+# The deploy target is NOT in the repo (this repo is public). Put it in
+# scripts/deploy.env (gitignored; copy scripts/deploy.env.example):
 #   DEPLOY_HOST  DEPLOY_PORT  DEPLOY_USER  DEPLOY_DIR  DEPLOY_BRANCH
 #
 # Tip: run `ssh-copy-id -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST"` once so
@@ -23,7 +22,6 @@
 
 set -euo pipefail
 
-# Optional local config, kept out of git.
 ENV_FILE="$(dirname "${BASH_SOURCE[0]}")/deploy.env"
 # shellcheck source=/dev/null
 [[ -f "$ENV_FILE" ]] && source "$ENV_FILE"
@@ -32,9 +30,9 @@ missing=()
 [[ -n "${DEPLOY_HOST:-}" ]] || missing+=(DEPLOY_HOST)
 [[ -n "${DEPLOY_USER:-}" ]] || missing+=(DEPLOY_USER)
 if (( ${#missing[@]} )); then
-  echo "✗ Missing: ${missing[*]}" >&2
+  echo "– missing: ${missing[*]}" >&2
   echo "  Set them in scripts/deploy.env (see scripts/deploy.env.example) or" >&2
-  echo "  export them. The real values are in the team's deployment notes." >&2
+  echo "  pass them as env vars." >&2
   exit 2
 fi
 

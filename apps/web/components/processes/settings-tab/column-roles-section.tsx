@@ -15,6 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { EventLogDetail, RemapColumnRoles } from "@/lib/api-types";
+import { cn } from "@/lib/cn";
 import { useRemapEventLog } from "@/lib/queries";
 
 import { SectionShell } from "./general-section";
@@ -38,6 +39,35 @@ const NONE = "__none__";
 interface DetectedSchema {
   source_columns?: unknown;
   columns?: unknown;
+  /** role → "user" | "exact" | "fuzzy" | "fallback", written at import time. */
+  column_role_quality?: unknown;
+}
+
+/** Same vocabulary as the import wizard, so a role reads identically in both. */
+const QUALITY_LABEL: Record<string, string> = {
+  user: "Your choice",
+  exact: "Matched",
+  fuzzy: "Guessed",
+  fallback: "Inferred from data",
+};
+
+function QualityChip({ quality }: { quality: string | undefined }) {
+  if (!quality || !QUALITY_LABEL[quality]) return null;
+  const guessed = quality === "fuzzy" || quality === "fallback";
+  return (
+    <span
+      className={cn(
+        "ml-1.5 rounded-sm px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide align-middle",
+        guessed
+          ? "bg-amber-500/10 text-amber-700 dark:text-amber-400"
+          : quality === "user"
+            ? "bg-primary/10 text-primary"
+            : "bg-chart-2/15 text-chart-2",
+      )}
+    >
+      {QUALITY_LABEL[quality]}
+    </span>
+  );
 }
 
 /**
@@ -52,6 +82,13 @@ export function ColumnRolesSection({ logId, log }: { logId: string; log: EventLo
     const d = (log.detected_schema as DetectedSchema | null) ?? null;
     const src = Array.isArray(d?.source_columns) ? d.source_columns : d?.columns;
     return Array.isArray(src) ? (src as string[]) : [];
+  }, [log.detected_schema]);
+
+  // How each role was matched at import time - shown so a guess never reads as
+  // a fact. Only meaningful for roles the user hasn't changed since.
+  const quality = useMemo(() => {
+    const raw = (log.detected_schema as DetectedSchema | null)?.column_role_quality;
+    return raw && typeof raw === "object" ? (raw as Record<string, string>) : {};
   }, [log.detected_schema]);
 
   const current = (log.column_roles ?? {}) as Record<string, string>;
@@ -130,6 +167,7 @@ export function ColumnRolesSection({ logId, log }: { logId: string; log: EventLo
               <div>
                 <Label className="text-xs font-medium">
                   {r.label} <span className="text-amber-500">*</span>
+                  {roles[r.key] === current[r.key] && <QualityChip quality={quality[r.key]} />}
                 </Label>
                 <p className="text-[11px] leading-tight text-muted-foreground">{r.hint}</p>
               </div>

@@ -1,11 +1,15 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { api, apiUpload } from "@/lib/api";
 import {
   queryKeys,
   eventLogsListPath,
+  eventsPath,
   modulesListPath,
+  ocelListPath,
+  variantsPath,
   type OcelListParams,
   type EventsListParams,
   type VariantsListParams,
@@ -13,6 +17,8 @@ import {
 import type {
   ActiveFilterResult,
   ActivitiesPage,
+  ActivityCasesPage,
+  ActivityDetail,
   BulkFillBody,
   BulkFillResult,
   CellPatch,
@@ -28,6 +34,7 @@ import type {
   FilterEntry,
   FolderSummary,
   JobDetail,
+  LogProbeResponse,
   ModuleSummary,
   OcelEventsPage,
   OcelObjectsPage,
@@ -58,28 +65,6 @@ function isEventLogListKey(queryKey: readonly unknown[]): boolean {
   );
 }
 
-function eventsPath(logId: string, params: EventsListParams): string {
-  const qs = new URLSearchParams();
-  if (params.offset !== undefined) qs.set("offset", String(params.offset));
-  if (params.limit !== undefined) qs.set("limit", String(params.limit));
-  if (params.sort) qs.set("sort", params.sort);
-  if (params.filter && params.filter.length > 0) qs.set("filter", JSON.stringify(params.filter));
-  if (params.q) qs.set("q", params.q);
-  if (params.missing_only) qs.set("missing_only", "true");
-  if (params.case_id) qs.set("case_id", params.case_id);
-  return `/api/v1/event-logs/${logId}/events${qs.toString() ? `?${qs}` : ""}`;
-}
-
-function variantsPath(logId: string, params: VariantsListParams): string {
-  const qs = new URLSearchParams();
-  if (params.offset !== undefined) qs.set("offset", String(params.offset));
-  if (params.limit !== undefined) qs.set("limit", String(params.limit));
-  if (params.sort) qs.set("sort", params.sort);
-  if (params.activity_contains) qs.set("activity_contains", params.activity_contains);
-  if (params.min_case_count !== undefined) qs.set("min_case_count", String(params.min_case_count));
-  return `/api/v1/event-logs/${logId}/variants${qs.toString() ? `?${qs}` : ""}`;
-}
-
 export function useEventLogs(params: { q?: string; status?: string } = {}) {
   return useQuery({
     queryKey: [...queryKeys.eventLogs(), params],
@@ -100,22 +85,15 @@ export function useEventLog(id: string | null) {
       if (!data) return false;
       // Poll through both transient states: `importing` (parsing) and
       // `processing` (modules precomputing) both resolve to `ready`/`failed`.
-      return data.status === "importing" || data.status === "processing" ? 1000 : false;
+      // The poll is only a safety net – the SSE bus (jobs-provider.tsx) already
+      // invalidates the ["event-logs"] prefix on log.ready / job.completed, so
+      // a relaxed cadence costs nothing when the stream is healthy.
+      return data.status === "importing" || data.status === "processing" ? 2500 : false;
     },
   });
 }
 
 // ── Object-centric (OCEL) hooks ──────────────────────────────────────────────
-
-function ocelListPath(logId: string, kind: string, params: OcelListParams): string {
-  const qs = new URLSearchParams();
-  if (params.offset !== undefined) qs.set("offset", String(params.offset));
-  if (params.limit !== undefined) qs.set("limit", String(params.limit));
-  if (params.object_type) qs.set("object_type", params.object_type);
-  if (params.activity) qs.set("activity", params.activity);
-  if (params.q) qs.set("q", params.q);
-  return `/api/v1/event-logs/${logId}/ocel/${kind}${qs.toString() ? `?${qs}` : ""}`;
-}
 
 export function useOcelOverview(logId: string | null, enabled = true) {
   return useQuery({
@@ -161,52 +139,69 @@ export function useModules(logId?: string | null) {
   });
 }
 
+/**
+ * Resolve a module id to its display name, for surfaces that only carry ids
+ * (the precompute checklist, job payloads). Shares the `useModules(null)` cache
+ * with the module grid and `/modules`, so it's normally a cache hit.
+ *
+ * The fallback is the **raw id, verbatim** - never prettified. The jobs drawer's
+ * filter box matches on ids, and a module the user has since uninstalled showing
+ * its id is the correct diagnostic.
+ */
+export function useModuleNames(): (moduleId: string) => string {
+  const { data } = useModules(null);
+  return useMemo(() => {
+    const byId = new Map((data ?? []).map((m) => [m.id, m.name]));
+    return (moduleId: string) => byId.get(moduleId) ?? moduleId;
+  }, [data]);
+}
+
+/** Upload a file to the staging area and get its columns back.
+ *
+ * This is the import wizard's *only* upload: the file goes up once, the server
+ * samples it, and `useImportEventLog` later confirms it by token. Exposes
+ * `progress` (0–100) for the upload-bytes phase via XHR; it holds at 100 while
+ * the server sniffs + probes the staged file, then resets to `null` on settle. */
+export function useStageUpload() {
+  const [progress, setProgress] = useState<number | null>(null);
+  const mutation = useMutation({
+    mutationFn: (file: File) =>
+      apiUpload<LogProbeResponse>("/api/v1/event-logs/stage", file, {
+        onProgress: (pct) => setProgress(Math.round(pct)),
+      }),
+    onMutate: () => setProgress(0),
+    onSettled: () => setProgress(null),
+  });
+  return Object.assign(mutation, { progress });
+}
+
 export function useImportEventLog() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: {
-      file: File;
+      /** Raw upload. Mutually exclusive with `stagingToken`. */
+      file?: File;
+      /** Token from `useStageUpload` – the bytes are already on the server. */
+      stagingToken?: string;
       name?: string;
       csvMapping?: unknown;
       xmlMapping?: unknown;
       jsonMapping?: unknown;
+      /** Confirmed role → source column mapping; wins over the server's guess. */
+      columnRoles?: Record<string, string>;
       folderId?: string | null;
     }) => {
       const fd = new FormData();
-      fd.append("file", input.file);
+      if (input.file) fd.append("file", input.file);
+      if (input.stagingToken) fd.append("staging_token", input.stagingToken);
       if (input.name) fd.append("name", input.name);
       if (input.csvMapping) fd.append("csv_mapping", JSON.stringify(input.csvMapping));
       if (input.xmlMapping) fd.append("xml_mapping", JSON.stringify(input.xmlMapping));
       if (input.jsonMapping) fd.append("json_mapping", JSON.stringify(input.jsonMapping));
+      if (input.columnRoles) fd.append("column_roles", JSON.stringify(input.columnRoles));
       if (input.folderId) fd.append("folder_id", input.folderId);
       return api<EventLogCreateResponse>("/api/v1/event-logs", { method: "POST", body: fd });
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.eventLogs() });
-    },
-  });
-}
-
-export function useImportEventLogFromUrl() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (input: {
-      url: string;
-      name?: string;
-      csvMapping?: unknown;
-      xmlMapping?: unknown;
-      jsonMapping?: unknown;
-    }) =>
-      api<EventLogCreateResponse>("/api/v1/event-logs/from-url", {
-        method: "POST",
-        json: {
-          url: input.url,
-          name: input.name || undefined,
-          csv_mapping: input.csvMapping ? JSON.stringify(input.csvMapping) : undefined,
-          xml_mapping: input.xmlMapping ? JSON.stringify(input.xmlMapping) : undefined,
-          json_mapping: input.jsonMapping ? JSON.stringify(input.jsonMapping) : undefined,
-        },
-      }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.eventLogs() });
     },
@@ -400,7 +395,51 @@ export function useReorderTree() {
         method: "POST",
         json: { items },
       }),
-    onSuccess: () => {
+    // Optimistic: write the new parent/position into the folder + log list
+    // caches immediately so a dropped row lands in its slot on mouse-up
+    // instead of snapping back until the server round-trip settles.
+    onMutate: async (items) => {
+      await Promise.all([
+        qc.cancelQueries({ queryKey: queryKeys.folders() }),
+        qc.cancelQueries({ predicate: (q) => isEventLogListKey(q.queryKey) }),
+      ]);
+      const prevFolders = qc.getQueryData<FolderSummary[]>(queryKeys.folders());
+      const prevLogs = qc.getQueriesData<EventLogSummary[]>({
+        predicate: (q) => isEventLogListKey(q.queryKey),
+      });
+      const folderMoves = new Map<string, ReorderItem>();
+      const logMoves = new Map<string, ReorderItem>();
+      for (const item of items) {
+        (item.kind === "folder" ? folderMoves : logMoves).set(item.id, item);
+      }
+      if (folderMoves.size > 0) {
+        qc.setQueryData<FolderSummary[]>(queryKeys.folders(), (old) =>
+          old?.map((f) => {
+            const m = folderMoves.get(f.id);
+            return m ? { ...f, parent_id: m.parent_id, position: m.position } : f;
+          }),
+        );
+      }
+      if (logMoves.size > 0) {
+        qc.setQueriesData<EventLogSummary[]>(
+          { predicate: (q) => isEventLogListKey(q.queryKey) },
+          (old) =>
+            Array.isArray(old)
+              ? old.map((l) => {
+                  const m = logMoves.get(l.id);
+                  return m ? { ...l, folder_id: m.parent_id, position: m.position } : l;
+                })
+              : old,
+        );
+      }
+      return { prevFolders, prevLogs };
+    },
+    onError: (_e, _items, ctx) => {
+      if (!ctx) return;
+      qc.setQueryData(queryKeys.folders(), ctx.prevFolders);
+      ctx.prevLogs.forEach(([key, data]) => qc.setQueryData(key, data));
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: queryKeys.folders() });
       qc.invalidateQueries({ queryKey: queryKeys.eventLogs() });
     },
@@ -544,8 +583,11 @@ export function useModuleConfig(moduleId: string) {
       api<{
         config: Record<string, unknown>;
         enabled: boolean;
-        /** When true, an admin has locked this module's config for all users. */
+        /** When true, *every* card of this module is admin-locked. */
         controlled_by_admin?: boolean;
+        /** Per-card lock state: { config?, ai?, model? } for each card the
+         *  module exposes. Each card is disabled independently from this. */
+        controlled_cards?: Record<string, boolean>;
       }>(`/api/v1/modules/${moduleId}/config`),
   });
 }
@@ -650,8 +692,8 @@ export interface ModuleModelsResponse {
   models: ModuleModel[];
   selected: string | null;
   active: string | null;
-  /** Admin pinned one shared model platform-wide; the per-user picker is
-   *  then read-only (Admin → Controls → CV4CDD detection model). */
+  /** Admin locked this module's model card (pinned one shared model
+   *  platform-wide); the per-user picker is then read-only. */
   locked?: boolean;
 }
 
@@ -664,21 +706,26 @@ export function useModuleModels(moduleId: string, enabled = true) {
   });
 }
 
-/** Upload a model archive (multipart). Shared across the whole platform. */
+/** Upload a model archive (multipart). Shared across the whole platform.
+ *
+ * Exposes `progress` (0–100) for the upload-bytes phase via XHR. It holds at
+ * 100 while the server extracts the ~0.5 GB archive, then resets to `null` when
+ * the request settles – callers render an indeterminate "installing" state for
+ * that tail (`isPending && (progress === null || progress >= 100)`). */
 export function useUploadModuleModel(moduleId: string) {
   const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (file: File) => {
-      const body = new FormData();
-      body.append("file", file);
-      return api<ModuleModel>(`/api/v1/modules/${moduleId}/models`, {
-        method: "POST",
-        body,
-      });
-    },
+  const [progress, setProgress] = useState<number | null>(null);
+  const mutation = useMutation({
+    mutationFn: (file: File) =>
+      apiUpload<ModuleModel>(`/api/v1/modules/${moduleId}/models`, file, {
+        onProgress: (pct) => setProgress(Math.round(pct)),
+      }),
+    onMutate: () => setProgress(0),
     onSuccess: () =>
       qc.invalidateQueries({ queryKey: queryKeys.moduleModels(moduleId) }),
+    onSettled: () => setProgress(null),
   });
+  return Object.assign(mutation, { progress });
 }
 
 /** Delete an installed model – removes it for every account on the platform. */
@@ -878,6 +925,36 @@ export function useActivities(logId: string) {
     queryKey: queryKeys.activities(logId),
     queryFn: () => api<ActivitiesPage>(`/api/v1/event-logs/${logId}/activities`),
     enabled: !!logId,
+    staleTime: 30_000,
+  });
+}
+
+export function useActivityDetail(logId: string, name: string | null) {
+  return useQuery({
+    queryKey: name
+      ? queryKeys.activityDetail(logId, name)
+      : ["event-logs", logId, "activities", "detail", "noop"],
+    queryFn: () =>
+      api<ActivityDetail>(
+        `/api/v1/event-logs/${logId}/activities/detail?name=${encodeURIComponent(name ?? "")}`,
+      ),
+    enabled: !!logId && !!name,
+    staleTime: 30_000,
+  });
+}
+
+export function useActivityCases(logId: string, name: string | null, offset = 0, limit = 100) {
+  return useQuery({
+    queryKey: name
+      ? queryKeys.activityCases(logId, name, offset, limit)
+      : ["event-logs", logId, "activities", "detail", "noop", "cases"],
+    queryFn: () =>
+      api<ActivityCasesPage>(
+        `/api/v1/event-logs/${logId}/activities/cases?name=${encodeURIComponent(
+          name ?? "",
+        )}&offset=${offset}&limit=${limit}`,
+      ),
+    enabled: !!logId && !!name,
     staleTime: 30_000,
   });
 }

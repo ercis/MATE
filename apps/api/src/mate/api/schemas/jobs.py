@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
+
+from mate.api.schemas.common import UtcDateTime
 
 JobStatus = Literal["queued", "running", "paused", "completed", "failed", "cancelled"]
 
@@ -29,6 +30,6 @@ class JobDetail(BaseModel):
     eta_seconds: float | None = None
     priority: int
     parent_job_id: str | None = None
-    created_at: datetime
-    started_at: datetime | None = None
-    finished_at: datetime | None = None
+    created_at: UtcDateTime
+    started_at: UtcDateTime | None = None
+    finished_at: UtcDateTime | None = None

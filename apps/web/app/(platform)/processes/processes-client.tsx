@@ -7,13 +7,7 @@ import { FolderPlus, Inbox, Plus, RefreshCw, Upload } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  PageContainer,
-  PageHeader,
-  PageTitle,
-  PageDescription,
-  PageActions,
-} from "@/components/page";
+import { PageContainer, PageHeader, PageActions } from "@/components/page";
 import { EmptyState } from "@/components/empty-state";
 import {
   NewFolderDialog,
@@ -25,47 +19,39 @@ import type { LogModel } from "@/lib/api-types";
 
 export function ProcessesClient() {
   const [newFolderOpen, setNewFolderOpen] = useState(false);
+  // Model filter lives here (not in ProcessList) so it can share the header row
+  // with the page actions.
+  const [model, setModel] = useState<ModelFilter>("all");
   return (
     <PageContainer>
-      <Header onNewFolder={() => setNewFolderOpen(true)} />
+      <PageHeader className="items-center">
+        <ModelFilterTabs model={model} onChange={setModel} />
+        <PageActions>
+          <Button variant="outline" asChild className="gap-2 cursor-pointer">
+            <Link href="/processes/watched">
+              <RefreshCw className="h-4 w-4" />
+              Watched folders
+            </Link>
+          </Button>
+
+          <Button variant="outline" onClick={() => setNewFolderOpen(true)} className="gap-2 cursor-pointer">
+            <FolderPlus className="h-4 w-4" />
+            New folder
+          </Button>
+
+          <Button asChild className="gap-2 cursor-pointer">
+            <Link href="/processes/import" data-tour="import-log">
+              <Upload className="h-4 w-4" />
+              Import event log
+            </Link>
+          </Button>
+        </PageActions>
+      </PageHeader>
       <Suspense fallback={<ListSkeleton />}>
-        <ProcessList />
+        <ProcessList model={model} />
       </Suspense>
       <NewFolderDialog open={newFolderOpen} onOpenChange={setNewFolderOpen} />
     </PageContainer>
-  );
-}
-
-function Header({ onNewFolder }: { onNewFolder: () => void }) {
-  return (
-    <PageHeader>
-      <div className="space-y-1">
-        <PageTitle>Processes</PageTitle>
-        <PageDescription>
-          Imported event logs. Drop a XES, XES.gz, or CSV here to start mining.
-        </PageDescription>
-      </div>
-      <PageActions>
-        <Button variant="outline" asChild className="gap-2 cursor-pointer">
-          <Link href="/processes/watched">
-            <RefreshCw className="h-4 w-4" />
-            Watched folders
-          </Link>
-        </Button>
-
-        <Button variant="outline" onClick={onNewFolder} className="gap-2 cursor-pointer">
-          <FolderPlus className="h-4 w-4" />
-          New folder
-        </Button>
-
-        <Button asChild className="gap-2 cursor-pointer">
-          <Link href="/processes/import">
-            <Upload className="h-4 w-4" />
-            Import event log
-          </Link>
-        </Button>
-      </PageActions>
-    </PageHeader>
   );
 }
 
@@ -87,11 +73,41 @@ const MODEL_FILTERS: { value: ModelFilter; label: string }[] = [
   { value: "object_centric", label: "Object-centric" },
 ];
 
-function ProcessList() {
+function ModelFilterTabs({
+  model,
+  onChange,
+}: {
+  model: ModelFilter;
+  onChange: (m: ModelFilter) => void;
+}) {
+  return (
+    <div className="inline-flex w-fit items-center gap-1 rounded-lg border border-border bg-muted/50 p-1">
+      {MODEL_FILTERS.map(({ value, label }) => (
+        <Button
+          key={value}
+          type="button"
+          size="sm"
+          variant="ghost"
+          aria-pressed={model === value}
+          className={cn(
+            "cursor-pointer border-0 shadow-none",
+            model === value
+              ? "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground dark:hover:bg-primary/90"
+              : "text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent",
+          )}
+          onClick={() => onChange(value)}
+        >
+          {label}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
+function ProcessList({ model }: { model: ModelFilter }) {
   const sp = useSearchParams();
   const q = sp.get("q") ?? undefined;
   const status = sp.get("status") ?? undefined;
-  const [model, setModel] = useState<ModelFilter>("all");
   const { data, isLoading, isError, error } = useEventLogs({ q, status });
 
   if (isLoading) return <ListSkeleton />;
@@ -130,41 +146,21 @@ function ProcessList() {
 
   const rows = model === "all" ? data : data.filter((l) => l.log_model === model);
 
+  if (rows.length === 0) {
+    return (
+      <EmptyState
+        icon={Inbox}
+        title="No matching processes"
+        description={`No ${
+          model === "case_centric" ? "case-centric" : "object-centric"
+        } logs yet. Switch to “All processes” to see everything.`}
+      />
+    );
+  }
+
   return (
-    <div className="space-y-3">
-      <div className="inline-flex w-fit items-center gap-1 rounded-lg border border-border bg-muted/50 p-1">
-        {MODEL_FILTERS.map(({ value, label }) => (
-          <Button
-            key={value}
-            type="button"
-            size="sm"
-            variant="ghost"
-            aria-pressed={model === value}
-            className={cn(
-              "cursor-pointer border-0 shadow-none",
-              model === value
-                ? "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground"
-                : "text-muted-foreground hover:bg-transparent hover:text-foreground",
-            )}
-            onClick={() => setModel(value)}
-          >
-            {label}
-          </Button>
-        ))}
-      </div>
-      {rows.length === 0 ? (
-        <EmptyState
-          icon={Inbox}
-          title="No matching processes"
-          description={`No ${
-            model === "case_centric" ? "case-centric" : "object-centric"
-          } logs yet. Switch to “All processes” to see everything.`}
-        />
-      ) : (
-        <div className="overflow-hidden rounded-xl border border-border bg-card">
-          <ProcessesTable rows={rows} />
-        </div>
-      )}
+    <div className="overflow-hidden rounded-xl border border-border bg-card">
+      <ProcessesTable rows={rows} />
     </div>
   );
 }

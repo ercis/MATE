@@ -60,6 +60,9 @@ services:
       context: .
       dockerfile: apps/api/Dockerfile
     container_name: mate-api
+    # PID-1 init (tini) so SIGTERM is forwarded to uvicorn and orphaned
+    # grandchildren (offload/forkserver workers) are reaped instead of zombied.
+    init: true
     volumes:
       # Persistent state. Back up by copying ./data.
       - ./data:/app/data
@@ -89,6 +92,47 @@ services:
       KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER:-http://localhost:8080/realms/flows-funds}
       KEYCLOAK_JWKS_URL: ${KEYCLOAK_JWKS_URL:-http://keycloak:8080/realms/flows-funds/protocol/openid-connect/certs}
       KEYCLOAK_AUDIENCE: ${KEYCLOAK_AUDIENCE:-flows-funds-api}
+      # Storage backend (env-only config – no admin UI, no DB row; see
+      # docs/S3_OFFLOAD.md). Default keeps everything on the data volume;
+      # STORAGE_MODE=s3 makes the bucket authoritative so the VM volume stops
+      # growing with total-data-ever. Values come from the host .env.
+      STORAGE_MODE: ${STORAGE_MODE:-local}
+      STORAGE_S3_ENDPOINT: ${STORAGE_S3_ENDPOINT:-}
+      STORAGE_S3_BUCKET: ${STORAGE_S3_BUCKET:-}
+      STORAGE_S3_REGION: ${STORAGE_S3_REGION:-}
+      STORAGE_S3_ACCESS_KEY: ${STORAGE_S3_ACCESS_KEY:-}
+      STORAGE_S3_SECRET_KEY: ${STORAGE_S3_SECRET_KEY:-}
+      STORAGE_S3_PATH_STYLE: ${STORAGE_S3_PATH_STYLE:-true}
+      STORAGE_S3_USE_SSL: ${STORAGE_S3_USE_SSL:-true}
+      STORAGE_S3_VERIFY: ${STORAGE_S3_VERIFY:-}
+      STORAGE_S3_PREFIX: ${STORAGE_S3_PREFIX:-}
+      STORAGE_S3_QUOTA_BYTES: ${STORAGE_S3_QUOTA_BYTES:-0}
+      # S3-mode local-cache reaper (dry-run by default; see docs/S3_OFFLOAD.md).
+      LOCAL_CACHE_MAX_BYTES: ${LOCAL_CACHE_MAX_BYTES:-0}
+      CACHE_EVICT_DRY_RUN: ${CACHE_EVICT_DRY_RUN:-true}
+      CACHE_EVICT_MIN_AGE_SECONDS: ${CACHE_EVICT_MIN_AGE_SECONDS:-600}
+      JOB_RETENTION_DAYS: ${JOB_RETENTION_DAYS:-0}
+      # MCP server (opt-in). The api image doesn't bake .env, so every MCP
+      # knob must be interpolated through here to reach the container.
+      MCP_ENABLED: ${MCP_ENABLED:-false}
+      API_BASE_URL: ${API_BASE_URL:-}
+      MCP_OAUTH_CLIENT_ID: ${MCP_OAUTH_CLIENT_ID:-}
+      MCP_READ_ONLY: ${MCP_READ_ONLY:-false}
+      MCP_TOOLSETS: ${MCP_TOOLSETS:-}
+      MCP_REQUIRE_EGRESS_CONSENT: ${MCP_REQUIRE_EGRESS_CONSENT:-true}
+      MCP_RATE_LIMIT_PER_MINUTE: ${MCP_RATE_LIMIT_PER_MINUTE:-120}
+      MCP_RATE_LIMIT_BURST: ${MCP_RATE_LIMIT_BURST:-40}
+      MCP_WRITE_RATE_LIMIT_PER_MINUTE: ${MCP_WRITE_RATE_LIMIT_PER_MINUTE:-30}
+      MCP_WRITE_RATE_LIMIT_BURST: ${MCP_WRITE_RATE_LIMIT_BURST:-10}
+      MCP_MAX_CONCURRENCY_PER_USER: ${MCP_MAX_CONCURRENCY_PER_USER:-4}
+      MCP_MAX_CONCURRENCY_GLOBAL: ${MCP_MAX_CONCURRENCY_GLOBAL:-32}
+      MCP_TOOL_TIMEOUT_SECONDS: ${MCP_TOOL_TIMEOUT_SECONDS:-30}
+      # Graph sidecar defaults (only meaningful with the "graph" profile up;
+      # harmless otherwise). Modules use these as connection fallbacks when the
+      # user hasn't set an explicit module config – see modules/actor_performance.
+      MATE_NEO4J_URI: ${MATE_NEO4J_URI:-bolt://neo4j:7687}
+      MATE_NEO4J_PASSWORD: ${NEO4J_PASSWORD:-mate-graph-dev}
+      MATE_NEO4J_IMPORT_DIR: /app/data/neo4j-import
     ports:
       - "8000:8000"
     depends_on:
@@ -104,6 +148,49 @@ services:
       # reuse the wheels in /app/data/uv-python and start in seconds, but the
       # initial grace period needs to cover the worst case.
       start_period: 600s
+    restart: unless-stopped
+
+  # Optional graph sidecar (compose profile "graph") for modules that need a
+  # Cypher engine – currently `actor_performance` (Event Knowledge Graph based).
+  # Not started by default: enable with COMPOSE_PROFILES=graph (DEPLOY.md §4b).
+  # Stock community image + APOC core only: the module imports via plain
+  # LOAD CSV, so no APOC Extended jar and no custom image. Community edition =
+  # single database; the module treats the graph as transient per-run scratch
+  # (wipe → build → extract → wipe) and serializes runs behind a lock.
+  neo4j:
+    image: neo4j:5.26-community
+    container_name: mate-neo4j
+    profiles: ["graph"]
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-mate-graph-dev}
+      NEO4J_PLUGINS: '["apoc"]'
+      # The module writes prepared CSVs into the shared import dir below and
+      # loads them from Cypher – both spellings keep APOC's file access on.
+      APOC_IMPORT_FILE_ENABLED: "true"
+      NEO4J_apoc_import_file_enabled: "true"
+      # Paper recommends 10G for the full BPIC17 (~1.2M events); 2G handles
+      # small/medium logs. Tune per box – see DEPLOY.md §4b.
+      NEO4J_server_memory_heap_max__size: ${NEO4J_HEAP:-2G}
+    ports:
+      # Loopback-only so host-mode `make dev` reaches bolt://localhost:7687.
+      # Never publish bolt on a public interface (prod overlay resets this).
+      - "127.0.0.1:7687:7687"
+    volumes:
+      # Shared with the api's ./data mount: the module writes prepared CSVs to
+      # ./data/neo4j-import (= /app/data/neo4j-import inside the api container),
+      # the server reads the same directory as its import dir.
+      - ./data/neo4j-import:/var/lib/neo4j/import
+      - neo4j-data:/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "cypher-shell -u neo4j -p \"${NEO4J_PASSWORD:-mate-graph-dev}\" 'RETURN 1' >/dev/null 2>&1",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
     restart: unless-stopped
 
   web:
@@ -122,6 +209,11 @@ services:
       # start – the API serves those bundles at /api/v1/modules/{id}/assets/.
       - ./modules:/app/modules
     environment:
+      # Next.js standalone (`node server.js`) binds to $HOSTNAME, which Docker
+      # sets to the container id - so it listens on eth0 only and the loopback
+      # healthcheck below (127.0.0.1) gets ECONNREFUSED → perpetually unhealthy.
+      # Force all-interfaces so both the probe and the proxy (web:3000) work.
+      HOSTNAME: "0.0.0.0"
       INTERNAL_API_URL: http://api:8000
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
       # Auth.js v5 – encrypts the session cookie. Rotate per environment.
@@ -142,7 +234,25 @@ services:
         condition: service_healthy
       keycloak:
         condition: service_healthy
+    healthcheck:
+      # IPv4 loopback explicitly - node may resolve localhost to ::1 while the
+      # standalone server binds 0.0.0.0 (v4) via the HOSTNAME override above.
+      # Any response < 500 counts (the login page answers 200 unauthenticated).
+      # Runs on the standalone runner's own node binary, no curl/wget needed.
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:3000/login', (r) => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      # First boot esbuilds every module panel before next starts.
+      start_period: 120s
     restart: unless-stopped
 
 volumes:
   kc-data:
+  neo4j-data:

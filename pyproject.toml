@@ -12,13 +12,29 @@ members = [
 line-length = 100
 target-version = "py312"
 src = ["apps/api/src", "packages/module-sdk-py/src"]
+# Vendored upstream research code, kept byte-close to its published form so it
+# stays diffable against the paper repos it came from (each ships its own
+# LICENSE). Linting it produced ~120 findings we will never act on, which made
+# `ruff check .` useless as a gate. The thin adapters we *do* own
+# (`<module>/module.py`, `adapter.py`, …) sit outside these paths and are linted.
+extend-exclude = [
+    "modules/agentsimulator/source",
+    "modules/cv4cdd/approaches",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "N", "SIM", "RUF"]
 ignore = ["E501"]  # line length is enforced by formatter
+# `×` is deliberate typography in the image-encoding docstrings (matrix shapes
+# like "256 × 256"), not a mistyped ASCII `x`.
+allowed-confusables = ["×"]
 
 [tool.ruff.lint.per-file-ignores]
 "apps/api/alembic/versions/*.py" = ["E", "F"]
+# `sys.setrecursionlimit()` has to run before the FastAPI/pm4py import graph is
+# built (see the comment at the call site), so the imports below it are E402 by
+# construction.
+"apps/api/src/mate/api/main.py" = ["E402"]
 
 [tool.pyright]
 include = ["apps/api/src", "packages/module-sdk-py/src"]

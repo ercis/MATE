@@ -4,7 +4,11 @@ from datetime import timedelta
 
 import pandas as pd
 
-from source.agent_types.calendar_discovery_parameters import int_week_days, str_week_days, conversion_table
+from source.agent_types.calendar_discovery_parameters import (
+    conversion_table,
+    int_week_days,
+    str_week_days,
+)
 
 
 class GranuleInfo:

@@ -13,6 +13,9 @@ const STYLES: Record<Variant, string> = {
 
 const STATUS_VARIANT: Record<string, Variant> = {
   importing: "info",
+  // Parsed, but still precomputing its modules - an in-flight state like
+  // `importing`, not the neutral fallthrough it used to get.
+  processing: "info",
   ready: "success",
   failed: "error",
 

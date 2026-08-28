@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 
+import {CardShell} from "@/components/dashboards/kit";
 import { formatNumber } from "@/lib/format";
 import {
   Select,
@@ -12,7 +13,6 @@ import {
 } from "@/components/ui/select";
 
 import { useOcdfg } from "../panel/queries";
-import { CardShell } from "./_kit";
 
 /** Object-centric directly-follows graph (OC-DFG): per object type, the
  * activity→activity edges with the number of unique objects that traverse

@@ -8,7 +8,6 @@ exactly once when the drag ends.
 
 from __future__ import annotations
 
-import shutil
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -19,13 +18,23 @@ from sqlalchemy import select
 from mate.api.auth import CurrentUserDep, get_owned_folder
 from mate.api.db.models import EventLog, Folder
 from mate.api.db.session import SessionDep
-from mate.api.ingest.storage import log_paths
 from mate.api.jobs.runtime import JobRuntime, get_job_runtime
 from mate.api.schemas.event_logs import (
     FolderCreate,
     FolderSummary,
     FolderUpdate,
     ReorderRequest,
+)
+
+# The cycle guard / sibling-position / cascade-delete bodies live in the
+# service layer so the MCP toolset can reuse them; these routes are thin
+# adapters over it.
+from mate.api.services.log_aggregates import (
+    cascade_delete_folder,
+    next_folder_position,
+)
+from mate.api.services.log_aggregates import (
+    ensure_no_folder_cycle as _ensure_no_cycle,
 )
 from mate.api.uuid7 import uuid7_str
 
@@ -43,23 +52,6 @@ _RuntimeDep = Annotated[JobRuntime, Depends(_runtime_dep)]
 
 def _utcnow() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
-
-
-async def _ensure_no_cycle(
-    session, folder_id: str, candidate_parent_id: str | None, user_id: str
-) -> None:
-    """Walking up from the candidate parent must not land on the folder itself."""
-    cur = candidate_parent_id
-    while cur is not None:
-        if cur == folder_id:
-            raise HTTPException(
-                status_code=422,
-                detail="Cannot move a folder into one of its descendants.",
-            )
-        parent = await session.get(Folder, cur)
-        if parent is None or parent.user_id != user_id or parent.deleted_at is not None:
-            return
-        cur = parent.parent_id
 
 
 @router.get("", response_model=list[FolderSummary])
@@ -85,15 +77,7 @@ async def create_folder(
         await get_owned_folder(session, payload.parent_id, user.id)
 
     # Append: position = max(sibling positions) + 1.
-    sib_max_stmt = select(Folder.position).where(
-        Folder.user_id == user.id,
-        Folder.deleted_at.is_(None),
-        Folder.parent_id.is_(payload.parent_id)
-        if payload.parent_id is None
-        else Folder.parent_id == payload.parent_id,
-    )
-    sibling_positions = list((await session.execute(sib_max_stmt)).scalars().all())
-    next_pos = (max(sibling_positions) + 1) if sibling_positions else 0
+    next_pos = await next_folder_position(session, user.id, payload.parent_id)
 
     folder = Folder(
         id=uuid7_str(),
@@ -152,74 +136,7 @@ async def delete_folder(
     is also removed. The frontend confirms intent before calling this.
     """
     await get_owned_folder(session, folder_id, user.id)
-
-    now = _utcnow()
-
-    # Collect every descendant folder id (including the target itself).
-    folder_ids: list[str] = []
-    stack: list[str] = [folder_id]
-    while stack:
-        cur = stack.pop()
-        folder_ids.append(cur)
-        descendants = (
-            (
-                await session.execute(
-                    select(Folder.id).where(
-                        Folder.user_id == user.id,
-                        Folder.parent_id == cur,
-                        Folder.deleted_at.is_(None),
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-        stack.extend(descendants)
-
-    log_rows = (
-        (
-            await session.execute(
-                select(EventLog).where(
-                    EventLog.user_id == user.id,
-                    EventLog.folder_id.in_(folder_ids),
-                    EventLog.deleted_at.is_(None),
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    deleted_log_ids: list[str] = []
-    for row in log_rows:
-        row.deleted_at = now
-        deleted_log_ids.append(row.id)
-
-    for fid in folder_ids:
-        f = await session.get(Folder, fid)
-        if f is not None and f.user_id == user.id and f.deleted_at is None:
-            f.deleted_at = now
-
-    await session.commit()
-
-    # Terminate any in-flight or queued jobs tied to the affected logs before
-    # we delete their on-disk directories, matching delete_event_log.
-    cancelled_jobs = await runtime.cancel_for_logs(deleted_log_ids)
-
-    for log_id in deleted_log_ids:
-        paths = log_paths(log_id, user.id)
-        if paths.exists():
-            try:
-                shutil.rmtree(paths.root)
-            except OSError as exc:
-                log.warning("event_log.cleanup_failed", log_id=log_id, error=str(exc))
-
-    log.info(
-        "folder.deleted",
-        folder_id=folder_id,
-        cascade_folders=len(folder_ids),
-        cascade_logs=len(deleted_log_ids),
-        cancelled_jobs=cancelled_jobs,
-    )
+    await cascade_delete_folder(session, runtime, user.id, folder_id)
 
 
 @router.post("/reorder", status_code=status.HTTP_204_NO_CONTENT)

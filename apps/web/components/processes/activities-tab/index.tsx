@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { RotateCcw, Search } from "lucide-react";
 import { toast } from "sonner";
 
@@ -21,6 +22,7 @@ import type { EventLogDetail } from "@/lib/api-types";
 import { useActivities, useUpdateEventLog } from "@/lib/queries";
 import { formatNumber } from "@/lib/format";
 import { getActivityRenameMap } from "@/lib/activity-rename";
+import { activityHref } from "@/lib/dashboards/drill";
 import { cn } from "@/lib/cn";
 
 export interface ActivitiesTabProps {
@@ -185,14 +187,15 @@ export function ActivitiesTab({ logId, log }: ActivitiesTabProps) {
                   return (
                     <TableRow key={row.activity} className="h-12">
                       <TableCell>
-                        <span
+                        <Link
+                          href={activityHref(logId, row.activity)}
                           className={cn(
-                            "font-mono text-xs",
+                            "font-mono text-xs hover:underline underline-offset-2",
                             renamed && "text-muted-foreground line-through",
                           )}
                         >
                           {row.activity}
-                        </span>
+                        </Link>
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
                         {formatNumber(row.count)}

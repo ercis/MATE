@@ -11,7 +11,6 @@ import {
 } from "recharts";
 
 import { useEvolution, type Granularity } from "../panel/queries";
-import { ChartFrame } from "./_kit";
 
 /**
  * Work-in-progress: open cases (started but not yet finished) at the end of each
@@ -72,3 +71,4 @@ export default function ActiveCases({
     </ChartFrame>
   );
 }
+import {ChartFrame} from "@/components/dashboards/kit";

@@ -16,6 +16,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { UploadProgress } from "@/components/settings/upload-progress";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
 import {
@@ -109,7 +110,18 @@ export function ModelStoreCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">{title}</CardTitle>
+        <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+          {title}
+          {locked && (
+            <Badge
+              variant="outline"
+              className="h-5 gap-1 border-destructive/30 bg-destructive/10 px-1.5 py-0 text-[10px] text-destructive"
+            >
+              <Lock className="h-3 w-3" />
+              Admin-controlled
+            </Badge>
+          )}
+        </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         {store.description && (
@@ -117,41 +129,44 @@ export function ModelStoreCard({
         )}
 
         {locked && (
-          <div className="flex items-start gap-2 rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
-            <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+          <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
+            <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
             <span>
-              The detection model is set by your administrator and applies to
-              everyone. You can't change the selection here.
+              The detection model is controlled by your administrator. You
+              cannot change the selection.
             </span>
           </div>
         )}
 
-        <div className="flex items-center gap-3">
-          <input
-            ref={fileRef}
-            type="file"
-            accept={accept}
-            className="hidden"
-            onChange={(e) => onFilePicked(e.target.files?.[0])}
-          />
-          <Button
-            size="sm"
-            variant="outline"
-            className="cursor-pointer gap-2"
-            disabled={upload.isPending}
-            onClick={() => fileRef.current?.click()}
-          >
-            {upload.isPending ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <HardDriveUpload className="h-3.5 w-3.5" />
-            )}
-            {upload.isPending ? "Uploading…" : "Upload model"}
-          </Button>
-          <span className="text-xs text-muted-foreground">
-            Accepts <code className="rounded bg-muted px-1 py-0.5">{accept}</code> · shared
-            platform-wide
-          </span>
+        <div className="space-y-2">
+          <div className="flex items-center gap-3">
+            <input
+              ref={fileRef}
+              type="file"
+              accept={accept}
+              className="hidden"
+              onChange={(e) => onFilePicked(e.target.files?.[0])}
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              className="cursor-pointer gap-2"
+              disabled={upload.isPending}
+              onClick={() => fileRef.current?.click()}
+            >
+              {upload.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <HardDriveUpload className="h-3.5 w-3.5" />
+              )}
+              {upload.isPending ? "Uploading…" : "Upload model"}
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              Accepts <code className="rounded bg-muted px-1 py-0.5">{accept}</code> · shared
+              platform-wide
+            </span>
+          </div>
+          <UploadProgress isPending={upload.isPending} progress={upload.progress} />
         </div>
 
         {modelsQ.isLoading ? (
@@ -165,7 +180,7 @@ export function ModelStoreCard({
             value={(locked ? modelsQ.data?.active : selected) ?? undefined}
             onValueChange={onChangeSelection}
             disabled={locked}
-            className="gap-2"
+            className={locked ? "gap-2 opacity-60" : "gap-2"}
           >
             {models.map((m) => {
               const busy = pendingName === m.name;

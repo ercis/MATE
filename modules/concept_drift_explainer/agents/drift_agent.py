@@ -22,6 +22,7 @@ from nltk.stem import PorterStemmer
 
 from ..state.schema import DriftInfo, GraphState
 
+
 # Built-in mapping from the cv4cdd panel's drift_type strings to the
 # canonical SUDDEN_DRIFT / GRADUAL_DRIFT / etc. labels the explanation prompts
 # branch on. cv4cdd emits these in lowercase, our explanation prompts match
@@ -71,10 +72,7 @@ def _format_trace(df, activity: str, max_events: int = 8) -> str:
         return f"- (no trace found containing '{activity}')"
     case_id = matches.iloc[0]["case_id"]
     case = df[df["case_id"] == case_id].head(max_events)
-    return "\n".join(
-        f"- [{row.timestamp}] {row.activity}"
-        for row in case.itertuples()
-    )
+    return "\n".join(f"- [{row.timestamp}] {row.activity}" for row in case.itertuples())
 
 
 def make_drift_agent(*, llm: BaseChatModel):
@@ -136,9 +134,10 @@ def make_drift_agent(*, llm: BaseChatModel):
                 summary = (resp.content or "").strip()
             except Exception as e:
                 logging.warning("LLM drift-phrase synthesis failed: %s", e)
-                summary = " ".join(
-                    re.findall(r"[A-Za-z]+", " ".join(changepoint_pair))
-                ).lower() or process_name
+                summary = (
+                    " ".join(re.findall(r"[A-Za-z]+", " ".join(changepoint_pair))).lower()
+                    or process_name
+                )
             phrase_cache[cache_key] = summary
 
         drift_phrase = f"{process_name}: {summary}"

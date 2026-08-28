@@ -50,7 +50,7 @@ def _utcnow() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
-async def _ledger_counts(session: SessionDep, watch_ids: list[str]) -> dict[str, dict[str, int]]:
+async def ledger_counts(session: SessionDep, watch_ids: list[str]) -> dict[str, dict[str, int]]:
     """{watch_id: {status: count}} rollup of the dedup ledger."""
     if not watch_ids:
         return {}
@@ -93,7 +93,7 @@ async def list_watched_folders(
         .scalars()
         .all()
     )
-    counts = await _ledger_counts(session, [r.id for r in rows])
+    counts = await ledger_counts(session, [r.id for r in rows])
     return [_summary(r, counts.get(r.id, {})) for r in rows]
 
 
@@ -113,7 +113,7 @@ async def create_watched_folder(
         await get_owned_folder(session, payload.dest_folder_id, user.id)
         dest_folder_id = payload.dest_folder_id
     elif payload.create_dest_folder:
-        dest_folder_id = await _create_dest_folder(session, user.id, payload.name.strip())
+        dest_folder_id = await create_dest_folder(session, user.id, payload.name.strip())
 
     # Make the managed local dir so files can be dropped in immediately, then
     # confirm the source is reachable (surfaces S3 credential/connection errors).
@@ -143,7 +143,7 @@ async def create_watched_folder(
     return _summary(watch, {})
 
 
-async def _create_dest_folder(session: SessionDep, user_id: str, name: str) -> str:
+async def create_dest_folder(session: SessionDep, user_id: str, name: str) -> str:
     """Append a new root /processes folder (mirrors routes.folders.create_folder)."""
     sibling_positions = list(
         (
@@ -177,7 +177,7 @@ async def get_watched_folder(
     watch_id: str, session: SessionDep, user: CurrentUserDep
 ) -> WatchedFolderDetail:
     row = await get_owned_watched_folder(session, watch_id, user.id)
-    counts = (await _ledger_counts(session, [watch_id])).get(watch_id, {})
+    counts = (await ledger_counts(session, [watch_id])).get(watch_id, {})
     files = (
         (
             await session.execute(
@@ -230,7 +230,7 @@ async def update_watched_folder(
         )
 
     await session.commit()
-    counts = (await _ledger_counts(session, [watch_id])).get(watch_id, {})
+    counts = (await ledger_counts(session, [watch_id])).get(watch_id, {})
     return _summary(row, counts)
 
 

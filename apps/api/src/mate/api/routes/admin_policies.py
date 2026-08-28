@@ -11,7 +11,10 @@ Two scopes:
 
 * ``setting`` - a curated catalog of server-side settings (``ai.config``,
   ``analytics.config``, ``worker_concurrency``).
-* ``module`` - every installed module's :class:`ModuleConfig`.
+* ``card`` - one item per settings *card* a loaded module exposes (config / ai /
+  model, from :func:`mate.api.modules.cards.derive_cards`), keyed
+  ``"<module_id>:<card_id>"``. Locking a card pins only that card's slice of
+  ``config_json``; the other cards stay per-user.
 
 Gated by the Keycloak ``admin`` realm role. Secrets (AI keys) are never
 serialized back - the catalog reports only ``secret_set``/``admin_value_set``
@@ -51,10 +54,19 @@ from mate.api.jobs.runtime import (
     save_persisted_concurrency,
 )
 from mate.api.modules import get_module_loader
+from mate.api.modules.cards import (
+    CARD_AI,
+    CARD_CONFIG,
+    CARD_MODEL,
+    CardSpec,
+    card_key,
+    derive_cards,
+    parse_card_key,
+)
 from mate.api.policy import (
     MODE_ADMIN,
     MODE_USER,
-    SCOPE_MODULE,
+    SCOPE_CARD,
     SCOPE_SETTING,
     get_policy,
     list_policies,
@@ -100,13 +112,6 @@ _SETTINGS: tuple[_SettingSpec, ...] = (
         "value; surfaced here.",
         has_secret=False,
     ),
-    _SettingSpec(
-        "cv4cdd.model",
-        "CV4CDD detection model",
-        "Pin one shared CV4CDD detection model for every user. Unlocked, each "
-        "user picks their own on the module's settings page.",
-        has_secret=False,
-    ),
 )
 _SETTING_KEYS = {s.key for s in _SETTINGS}
 
@@ -117,21 +122,29 @@ _SETTING_KEYS = {s.key for s in _SETTINGS}
 
 
 class ControlItem(BaseModel):
-    scope: Literal["setting", "module"]
+    scope: Literal["setting", "card"]
     key: str
     label: str
     description: str | None = None
     control_mode: str = MODE_USER
     # Whether the admin value has been set (never the value itself for secrets).
     admin_value_set: bool = False
-    # For non-secret settings/modules, the admin value can be safely echoed so
-    # the editor can prefill it. Secrets (ai.config) leave this None and rely on
+    # For non-secret settings/cards, the admin value can be safely echoed so the
+    # editor can prefill it. Secrets (ai.config) leave this None and rely on
     # ``secret_set`` instead.
     admin_value: Any | None = None
     # True when *any* secret is stored in the admin value (ai.config only).
     secret_set: bool = False
-    # Modules carry their JSON-schema so the editor can render inputs.
+    # The config card's JSON-schema so the editor can render inputs.
     config_schema: dict[str, Any] | None = None
+    # Card scope only: which module + card this item controls, the card's human
+    # title, and the manifest hints the admin UI renders the right editor from
+    # (model_store for the model card, ai_models for the ai card).
+    module_id: str | None = None
+    card_id: str | None = None
+    title: str | None = None
+    model_store: dict[str, Any] | None = None
+    ai_models: dict[str, Any] | None = None
 
 
 class ControlItems(BaseModel):
@@ -173,6 +186,33 @@ def _setting_item(spec: _SettingSpec, policy_value: Any | None, mode: str) -> Co
     )
 
 
+def _card_item(module_id: str, card: CardSpec, manifest: Any, policy: Any | None) -> ControlItem:
+    """A per-card control item, carrying the manifest hints the admin UI renders
+    the card's editor from (config schema / model store / ai models)."""
+    return ControlItem(
+        scope=SCOPE_CARD,
+        key=card_key(module_id, card.card_id),
+        module_id=module_id,
+        card_id=card.card_id,
+        label=manifest.name,
+        title=card.title,
+        control_mode=policy.control_mode if policy is not None else MODE_USER,
+        admin_value_set=policy is not None and policy.admin_value_json is not None,
+        admin_value=policy.admin_value_json if policy is not None else None,
+        config_schema=(manifest.config_schema if card.card_id == CARD_CONFIG else None),
+        model_store=(
+            manifest.model_store.model_dump()
+            if card.card_id == CARD_MODEL and manifest.model_store is not None
+            else None
+        ),
+        ai_models=(
+            manifest.ai_models.model_dump()
+            if card.card_id == CARD_AI and manifest.ai_models is not None
+            else None
+        ),
+    )
+
+
 def _merge_ai_value(new: dict[str, Any], old: Any | None) -> dict[str, Any]:
     """Validate an ai.config admin value, keeping stored keys when blank - mirrors
     ``admin_storage._settings_from_in`` and ``routes/ai.put_config``."""
@@ -202,7 +242,7 @@ def _merge_ai_value(new: dict[str, Any], old: Any | None) -> dict[str, Any]:
 async def list_items(
     user: AdminUserDep,
     session: SessionDep,
-    scope: Literal["setting", "module"] = "setting",
+    scope: Literal["setting", "card"] = "setting",
 ) -> ControlItems:
     """The controllable catalog for ``scope`` joined to existing policy rows."""
     policies = {p.key: p for p in await list_policies(session, scope)}
@@ -218,7 +258,7 @@ async def list_items(
         ]
         return ControlItems(items=items)
 
-    # scope == module: union of loader manifests and distinct installed ids.
+    # scope == card: one item per (module, card) each loaded module exposes.
     manifests: dict[str, Any] = {}
     try:
         loader = get_module_loader()
@@ -228,22 +268,39 @@ async def list_items(
         manifests = {}
 
     installed_ids = set((await session.scalars(select(distinct(ModuleInstall.module_id)))).all())
-    all_ids = sorted(set(manifests) | installed_ids | set(policies))
 
-    items = []
-    for mid in all_ids:
+    items: list[ControlItem] = []
+    emitted: set[str] = set()
+    for mid in sorted(set(manifests) | installed_ids):
         manifest = manifests.get(mid)
-        policy = policies.get(mid)
+        if manifest is None:
+            # Installed but not loaded → its cards are unknown until it loads.
+            continue
+        for card in derive_cards(manifest):
+            k = card_key(mid, card.card_id)
+            emitted.add(k)
+            items.append(_card_item(mid, card, manifest, policies.get(k)))
+
+    # Orphan card policies whose module is no longer loaded - surfaced so an
+    # admin can still see and clear a stale lock.
+    for k, policy in policies.items():
+        if k in emitted:
+            continue
+        parsed = parse_card_key(k)
+        if parsed is None:
+            continue
+        omid, ocid = parsed
         items.append(
             ControlItem(
-                scope=SCOPE_MODULE,
-                key=mid,
-                label=manifest.name if manifest is not None else mid,
-                description=manifest.description if manifest is not None else None,
-                control_mode=policy.control_mode if policy is not None else MODE_USER,
-                admin_value_set=policy is not None and policy.admin_value_json is not None,
-                admin_value=policy.admin_value_json if policy is not None else None,
-                config_schema=manifest.config_schema if manifest is not None else None,
+                scope=SCOPE_CARD,
+                key=k,
+                module_id=omid,
+                card_id=ocid,
+                label=omid,
+                title=ocid,
+                control_mode=policy.control_mode,
+                admin_value_set=policy.admin_value_json is not None,
+                admin_value=policy.admin_value_json,
             )
         )
     return ControlItems(items=items)
@@ -251,7 +308,7 @@ async def list_items(
 
 @router.put("/items/{scope}/{key}", response_model=ControlItem)
 async def set_item(
-    scope: Literal["setting", "module"],
+    scope: Literal["setting", "card"],
     key: str,
     body: ControlUpdate,
     user: AdminUserDep,
@@ -265,6 +322,8 @@ async def set_item(
     """
     if scope == SCOPE_SETTING and key not in _SETTING_KEYS:
         raise HTTPException(status_code=404, detail=f"Unknown setting {key!r}.")
+    if scope == SCOPE_CARD and parse_card_key(key) is None:
+        raise HTTPException(status_code=404, detail=f"Invalid card key {key!r}.")
 
     admin_value: Any | None = None
     if body.control_mode == MODE_ADMIN:
@@ -311,20 +370,29 @@ async def set_item(
         spec = next(s for s in _SETTINGS if s.key == key)
         return _setting_item(spec, row.admin_value_json, row.control_mode)
 
-    manifest = None
+    # scope == card
+    parsed = parse_card_key(key)
+    assert parsed is not None  # validated at the top of the handler
+    module_id, card_id = parsed
     try:
-        manifest = get_module_loader().loaded.get(key)
+        loaded = get_module_loader().loaded.get(module_id)
     except HTTPException:
-        manifest = None
+        loaded = None
+    if loaded is not None:
+        card = next((c for c in derive_cards(loaded.manifest) if c.card_id == card_id), None)
+        if card is not None:
+            return _card_item(module_id, card, loaded.manifest, row)
+    # Unknown / orphan card - echo minimal state.
     return ControlItem(
-        scope=SCOPE_MODULE,
+        scope=SCOPE_CARD,
         key=key,
-        label=manifest.manifest.name if manifest is not None else key,
-        description=manifest.manifest.description if manifest is not None else None,
+        module_id=module_id,
+        card_id=card_id,
+        label=module_id,
+        title=card_id,
         control_mode=row.control_mode,
         admin_value_set=row.admin_value_json is not None,
         admin_value=row.admin_value_json,
-        config_schema=manifest.manifest.config_schema if manifest is not None else None,
     )
 
 
@@ -442,26 +510,32 @@ async def _validate_admin_value(
                 detail=f"Invalid analytics config: {exc}",
             ) from exc
 
-    if scope == SCOPE_SETTING and key == "cv4cdd.model":
-        # The shared model is the folder name the cv4cdd model_store installed.
-        # Locking requires a concrete model - an empty lock would just make every
-        # user's autodetect fail with "no model", which defeats the point.
-        if not isinstance(value, str) or not value.strip():
+    if scope == SCOPE_CARD:
+        # A card's admin value is the dict merged into config_json for the slice
+        # it owns (config props / ``{"ai": {...}}`` / ``{config_key: name}``).
+        # Best-effort: require an object so it flows into ModuleContext.config.
+        parsed = parse_card_key(key)
+        if parsed is None:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Select a CV4CDD model to lock; the shared value must be a model name.",
+                detail=f"Invalid card key {key!r}.",
             )
-        return value.strip()
-
-    if scope == SCOPE_MODULE:
-        # Best-effort: module config is free-form JSON shaped by config_schema.
-        # We only require an object so it can flow into ModuleContext.config.
+        _module_id, card_id = parsed
         if value is None:
             return {}
         if not isinstance(value, dict):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Module admin config must be an object.",
+                detail="Card admin config must be an object.",
+            )
+        if card_id == CARD_MODEL and not any(
+            isinstance(v, str) and v.strip() for v in value.values()
+        ):
+            # Pinning a model card requires a concrete model name; an empty pin
+            # would just make every user's autodetect fail with "no model".
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Select a model to lock; the shared value must name a model.",
             )
         return value
 

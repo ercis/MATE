@@ -54,6 +54,11 @@ export const queryKeys = {
     ["event-logs", logId, "variants", variantId, "cases", offset, limit] as const,
   dataQuality: (logId: string) => ["event-logs", logId, "data-quality"] as const,
   activities: (logId: string) => ["event-logs", logId, "activities"] as const,
+  // Nested under the `activities` prefix so existing invalidations cover them.
+  activityDetail: (logId: string, name: string) =>
+    ["event-logs", logId, "activities", "detail", name] as const,
+  activityCases: (logId: string, name: string, offset: number, limit: number) =>
+    ["event-logs", logId, "activities", "detail", name, "cases", offset, limit] as const,
   ocelOverview: (logId: string) => ["event-logs", logId, "ocel", "overview"] as const,
   ocelObjectTypes: (logId: string) => ["event-logs", logId, "ocel", "object-types"] as const,
   ocelObjects: (logId: string, params: OcelListParams) =>
@@ -114,4 +119,47 @@ export function moduleManifestPath(id: string): string {
 
 export function moduleConfigPath(id: string): string {
   return `/api/v1/modules/${id}/config`;
+}
+
+// ── Process-detail tab defaults + list paths ─────────────────────────────────
+// Shared by the tab components AND `prefetchProcessTabs` (client-prefetch.ts):
+// both sides must build the SAME params object – and therefore the same query
+// key – or the prefetch warms a cache entry nobody reads. TanStack drops
+// `undefined` members when hashing keys, so a prefetch that omits an optional
+// param matches a tab that passes it explicitly as `undefined`.
+
+export const PROCESS_PAGE_SIZE = 50;
+export const DEFAULT_VARIANTS_SORT = "case_count:desc";
+export const OCEL_PAGE_SIZE = 100;
+
+export function eventsPath(logId: string, params: EventsListParams): string {
+  const qs = new URLSearchParams();
+  if (params.offset !== undefined) qs.set("offset", String(params.offset));
+  if (params.limit !== undefined) qs.set("limit", String(params.limit));
+  if (params.sort) qs.set("sort", params.sort);
+  if (params.filter && params.filter.length > 0) qs.set("filter", JSON.stringify(params.filter));
+  if (params.q) qs.set("q", params.q);
+  if (params.missing_only) qs.set("missing_only", "true");
+  if (params.case_id) qs.set("case_id", params.case_id);
+  return `/api/v1/event-logs/${logId}/events${qs.toString() ? `?${qs}` : ""}`;
+}
+
+export function variantsPath(logId: string, params: VariantsListParams): string {
+  const qs = new URLSearchParams();
+  if (params.offset !== undefined) qs.set("offset", String(params.offset));
+  if (params.limit !== undefined) qs.set("limit", String(params.limit));
+  if (params.sort) qs.set("sort", params.sort);
+  if (params.activity_contains) qs.set("activity_contains", params.activity_contains);
+  if (params.min_case_count !== undefined) qs.set("min_case_count", String(params.min_case_count));
+  return `/api/v1/event-logs/${logId}/variants${qs.toString() ? `?${qs}` : ""}`;
+}
+
+export function ocelListPath(logId: string, kind: string, params: OcelListParams): string {
+  const qs = new URLSearchParams();
+  if (params.offset !== undefined) qs.set("offset", String(params.offset));
+  if (params.limit !== undefined) qs.set("limit", String(params.limit));
+  if (params.object_type) qs.set("object_type", params.object_type);
+  if (params.activity) qs.set("activity", params.activity);
+  if (params.q) qs.set("q", params.q);
+  return `/api/v1/event-logs/${logId}/ocel/${kind}${qs.toString() ? `?${qs}` : ""}`;
 }

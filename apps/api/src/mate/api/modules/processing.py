@@ -89,14 +89,47 @@ class ModuleProcessingCoordinator:
         the frontend: roots (direct import subscribers) carry an empty ``after``;
         a chained module lists the upstream module-ids it waits on. Stored on the
         import job's payload so the jobs UI can render waiting/skipped steps.
+
+        The list is in **execution order** (topological), not alphabetical - the
+        jobs UI renders it verbatim as a checklist, and a plan that reads
+        "chained_mod, precompute_mod" tells the user the opposite of what will
+        happen. Sorting here rather than in each client keeps the persisted
+        artefact (and the copy the MCP jobs toolset hands the LLM) correct too.
         """
         nodes, edges = await self._closure(topic, user_id, session)
         roots = self._loader.precompute_subscriber_module_ids(topic) & nodes
-        plan = [
-            {"id": mid, "after": [] if mid in roots else sorted(edges.get(mid, set()))}
-            for mid in sorted(nodes)
-        ]
+        # Build `after` once and reuse it for the ordering, so the two can never
+        # disagree (a root that also consumes something stays a root in both).
+        after = {
+            mid: ([] if mid in roots else sorted(edges.get(mid, set()) & nodes)) for mid in nodes
+        }
+        plan = [{"id": mid, "after": after[mid]} for mid in self._topo_order(after)]
         return nodes, plan
+
+    @staticmethod
+    def _topo_order(after: dict[str, list[str]]) -> list[str]:
+        """Module ids in dependency order; alphabetical within a layer.
+
+        Kahn's algorithm over the same ``after`` lists the plan publishes. The
+        per-layer ``sorted()`` makes the output byte-stable across imports (dict
+        iteration order would otherwise leak insertion order into a persisted
+        artefact). A cycle - impossible for a `provides`/`consumes` graph the
+        loader validated, but cheap to survive - leaves its members unemitted, so
+        they are appended rather than silently dropped.
+        """
+        pending = {mid: set(deps) for mid, deps in after.items()}
+        emitted: list[str] = []
+        done: set[str] = set()
+        while True:
+            layer = sorted(mid for mid, deps in pending.items() if deps <= done)
+            if not layer:
+                break
+            for mid in layer:
+                emitted.append(mid)
+                done.add(mid)
+                del pending[mid]
+        emitted.extend(sorted(pending))
+        return emitted
 
     async def check_and_finalize(self, log_id: str, session: AsyncSession) -> bool:
         """Flip a ``processing`` log to ``ready`` once its expected modules are done.

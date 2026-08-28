@@ -13,9 +13,10 @@ GET  /jobs/{id}/stream           - high-frequency SSE progress for a single job
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from collections.abc import AsyncIterator
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 import structlog
@@ -31,7 +32,9 @@ from mate.api.db.models import Job
 from mate.api.db.session import SessionDep
 from mate.api.events import get_event_bus
 from mate.api.jobs.runtime import get_job_runtime
+from mate.api.schemas.common import utc_isoformat
 from mate.api.schemas.jobs import JobDetail
+from mate.api.shutdown import is_shutting_down
 
 log = structlog.get_logger(__name__)
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -52,6 +55,11 @@ async def list_jobs(
     if type_filter:
         stmt = stmt.where(Job.type == type_filter)
     if since:
+        # Stored datetimes are naive UTC; an offset-aware `since` (e.g. the
+        # `...Z` created_at we now emit, echoed back) must be normalized before
+        # the SQL comparison or SQLite compares mismatched text forms.
+        if since.tzinfo is not None:
+            since = since.astimezone(UTC).replace(tzinfo=None)
         stmt = stmt.where(Job.created_at >= since)
     rows = (await session.execute(stmt)).scalars().all()
     return [JobDetail.model_validate(r) for r in rows]
@@ -130,12 +138,15 @@ async def resume_queue(user: CurrentUserDep) -> None:
 
 # Idle keep-alive cadence; matches ``events_sse._HEARTBEAT_S``.
 _HEARTBEAT_S = 15.0
+# Shutdown-flag poll cadence; matches ``events_sse._SHUTDOWN_POLL_S``.
+_SHUTDOWN_POLL_S = 2.0
 _SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 
 
 def _json_default(value: Any) -> Any:
     if isinstance(value, datetime):
-        return value.isoformat()
+        # Naive datetimes are UTC platform-wide; serialize with the offset.
+        return utc_isoformat(value)
     return str(value)
 
 
@@ -165,22 +176,44 @@ async def stream_job(job_id: str, session: SessionDep, user: CurrentUserDep) -> 
     async def _gen() -> AsyncIterator[str]:
         yield _sse(snapshot)
         async with bus.subscribe(["job.*"]) as stream:
-            while True:
-                try:
-                    env = await asyncio.wait_for(anext(stream), _HEARTBEAT_S)
-                except TimeoutError:
-                    yield ": ping\n\n"
-                    continue
-                except StopAsyncIteration:
-                    return
-                payload = env.payload
-                if payload.get("id") != job_id:
-                    continue
-                if payload.get("user_id") not in (None, user.id):
-                    continue
-                yield _sse(env.to_json())
-                if env.topic in {"job.completed", "job.failed", "job.cancelled"}:
-                    # Terminal event - end the stream cleanly.
-                    return
+            # One pending pull kept alive across idle ticks - see events_sse._gen:
+            # `asyncio.wait(timeout=)` doesn't cancel on timeout, so a quiet
+            # interval no longer closes the bus generator (which used to end the
+            # stream ~2 s after connect and drop events in the reconnect gap).
+            nxt = asyncio.ensure_future(anext(stream))
+            idle = 0.0
+            try:
+                while True:
+                    # Poll the shutdown flag so the stream exits during uvicorn's
+                    # connection drain instead of being force-cancelled at the
+                    # grace deadline (which prints a CancelledError ASGI traceback).
+                    if is_shutting_down():
+                        return
+                    done, _ = await asyncio.wait({nxt}, timeout=_SHUTDOWN_POLL_S)
+                    if not done:
+                        idle += _SHUTDOWN_POLL_S
+                        if idle >= _HEARTBEAT_S:
+                            idle = 0.0
+                            yield ": ping\n\n"
+                        continue
+                    try:
+                        env = nxt.result()
+                    except StopAsyncIteration:
+                        return
+                    nxt = asyncio.ensure_future(anext(stream))
+                    idle = 0.0
+                    payload = env.payload
+                    if payload.get("id") != job_id:
+                        continue
+                    if payload.get("user_id") not in (None, user.id):
+                        continue
+                    yield _sse(env.to_json())
+                    if env.topic in {"job.completed", "job.failed", "job.cancelled"}:
+                        # Terminal event - end the stream cleanly.
+                        return
+            finally:
+                nxt.cancel()
+                with contextlib.suppress(BaseException):
+                    await nxt
 
     return StreamingResponse(_gen(), media_type="text/event-stream", headers=_SSE_HEADERS)

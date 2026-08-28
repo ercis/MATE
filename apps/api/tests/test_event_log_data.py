@@ -339,6 +339,128 @@ async def test_activities_listing(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_activity_detail_stats(client: AsyncClient) -> None:
+    log_id = await _seed_log(client)
+    resp = await client.get(
+        f"/api/v1/event-logs/{log_id}/activities/detail", params={"name": "ship"}
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["activity"] == "ship"
+    assert body["event_count"] == 2
+    assert body["event_pct"] == pytest.approx(2 / 9)
+    assert body["case_count"] == 2
+    assert body["case_pct"] == pytest.approx(2 / 3)
+    assert body["start_case_count"] == 0
+    assert body["end_case_count"] == 2
+    assert body["end_case_pct"] == pytest.approx(2 / 3)
+    assert body["avg_occurrences_per_case"] == pytest.approx(1.0)
+    assert body["max_occurrences_per_case"] == 1
+    assert body["first_seen"] is not None
+    assert body["last_seen"] is not None
+    # Exactly one variant contains "ship"; its id round-trips into the
+    # canonical variant-detail endpoint.
+    assert body["variant_count"] == 1
+    assert len(body["top_variants"]) == 1
+    top = body["top_variants"][0]
+    assert top["activities"] == ["register order", "check stock", "ship"]
+    variant = await client.get(f"/api/v1/event-logs/{log_id}/variants/{top['variant_id']}")
+    assert variant.status_code == 200, variant.text
+    assert variant.json()["activities"] == top["activities"]
+
+    # "register order" starts every case and appears in both variants.
+    reg = (
+        await client.get(
+            f"/api/v1/event-logs/{log_id}/activities/detail",
+            params={"name": "register order"},
+        )
+    ).json()
+    assert reg["start_case_count"] == 3
+    assert reg["start_case_pct"] == pytest.approx(1.0)
+    assert reg["end_case_count"] == 0
+    assert reg["variant_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_activity_detail_exact_membership_not_substring(client: AsyncClient) -> None:
+    log_id = await _seed_log(client)
+    # Rename case-3's "ship" event to "ship extra": a substring match would
+    # still count it under "ship", exact membership must not.
+    rows = (await client.get(f"/api/v1/event-logs/{log_id}/events")).json()["rows"]
+    idx = next(
+        i for i, r in enumerate(rows) if r["case_id"] == "case-3" and r["activity"] == "ship"
+    )
+    patched = await client.patch(
+        f"/api/v1/event-logs/{log_id}/events/{idx}",
+        json={"field": "activity", "value": "ship extra"},
+    )
+    assert patched.status_code == 200, patched.text
+
+    detail = (
+        await client.get(f"/api/v1/event-logs/{log_id}/activities/detail", params={"name": "ship"})
+    ).json()
+    assert detail["event_count"] == 1
+    assert detail["case_count"] == 1
+    assert detail["variant_count"] == 1
+    assert detail["top_variants"][0]["activities"] == ["register order", "check stock", "ship"]
+
+
+@pytest.mark.asyncio
+async def test_activity_detail_awkward_name(client: AsyncClient) -> None:
+    """Names with `/`, `%` and unicode survive the query-param transport."""
+    log_id = await _seed_log(client)
+    awkward = "a/b %2F c ✓"
+    rows = (await client.get(f"/api/v1/event-logs/{log_id}/events")).json()["rows"]
+    idx = next(i for i, r in enumerate(rows) if r["activity"] == "cancel")
+    patched = await client.patch(
+        f"/api/v1/event-logs/{log_id}/events/{idx}",
+        json={"field": "activity", "value": awkward},
+    )
+    assert patched.status_code == 200, patched.text
+
+    resp = await client.get(
+        f"/api/v1/event-logs/{log_id}/activities/detail", params={"name": awkward}
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["activity"] == awkward
+    assert body["event_count"] == 1
+    assert body["case_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_activity_detail_unknown_404(client: AsyncClient) -> None:
+    log_id = await _seed_log(client)
+    resp = await client.get(
+        f"/api/v1/event-logs/{log_id}/activities/detail", params={"name": "does not exist"}
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_activity_cases(client: AsyncClient) -> None:
+    log_id = await _seed_log(client)
+    resp = await client.get(
+        f"/api/v1/event-logs/{log_id}/activities/cases", params={"name": "check stock"}
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total"] == 3
+    assert {r["case_id"] for r in body["rows"]} == {"case-1", "case-2", "case-3"}
+    assert all(r["occurrences"] == 1 for r in body["rows"])
+    assert all(r["event_count"] == 3 for r in body["rows"])
+
+    paged = (
+        await client.get(
+            f"/api/v1/event-logs/{log_id}/activities/cases",
+            params={"name": "check stock", "limit": 2, "offset": 2},
+        )
+    ).json()
+    assert paged["total"] == 3
+    assert len(paged["rows"]) == 1
+
+
+@pytest.mark.asyncio
 async def test_activity_labels_round_trip(client: AsyncClient) -> None:
     """The Activities tab persists renames inside column_overrides.activity_labels."""
     log_id = await _seed_log(client)

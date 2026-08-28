@@ -1,0 +1,131 @@
+id: actor_performance
+name: Actor Performance
+version: 1.0.0
+category: advanced
+description: >-
+  Decomposes waiting times between process steps by actor behavior: did the same
+  actor continue directly, continue after an interruption, or hand the work over
+  to another actor (and was that actor idle, or busy prioritizing other work)?
+  Builds an Event Knowledge Graph in a Neo4j sidecar to derive the behavior classes.
+  Based on Klijn et al., "Decomposing Process Performance based on Actor Behavior"
+  (ICPM 2024).
+about: >-
+  Average waiting times hide what actually causes the wait. This module classifies
+  every case transition by the behavior of the actors involved — direct continuation,
+  interruption, or one of three handover types — and shows how much waiting time each
+  behavior contributes per transition. Use it to see whether long waits come from
+  overloaded actors, from batching, or from handovers sitting idle in a queue.
+  Requires the optional Neo4j graph sidecar (compose profile "graph"); the graph is
+  used as transient compute scratch per run and wiped afterwards.
+source:
+  - title: Decomposing process performance based on actor behavior
+    fullCitation: >-
+      E. L. Klijn, I. Tentina, D. Fahland, and F. Mannhardt, "Decomposing
+      process performance based on actor behavior," in Proc. ICPM, 2024
+    url: https://doi.org/10.1109/ICPM63005.2024.10680657
+artifacts:
+  - name: Reference implementation (E. L. Klijn) - EKG BPIC17 decomposition
+    url: https://github.com/multi-dimensional-process-mining/ekg_bpic17_decomposing_performance_by_actor_behavior
+  - name: PromG - the Event Knowledge Graph library the pipeline builds on
+    url: https://github.com/PromG-dev/promg-core
+# promg is GPL-3.0 and this module imports it, so the module folder is GPL-3.0.
+# The reference implementation repo has no license file; its queries were
+# rewritten (and fixed) here with credit rather than vendored.
+license: GPL-3.0
+
+keywords:
+  - actor behavior
+  - handover
+  - waiting time
+  - performance decomposition
+  - event knowledge graph
+  - task instances
+  - resource behavior
+
+requirements:
+  event_log:
+    log_model: case_centric
+    # The analysis is about who performed consecutive steps, so a resource
+    # column is required. `lifecycle` is used when present (transition-level
+    # logs like BPIC17); absent it is synthesized as an empty string.
+    required_columns: [case_id, activity, timestamp, resource]
+    optional_columns: [lifecycle]
+    min_events: 100
+    min_cases: 5
+  modules: []
+  optional_modules: []
+
+provides:
+  - actor_performance.analysis.completed
+consumes: []
+
+dependencies:
+  python:
+    # promg==1.0.10 (the version the reference implementation targets) has no
+    # dependency pins of its own and breaks on the platform's pandas 3.x
+    # (string-dtype columns fall out of its dtype mapper) and on neo4j-driver
+    # 6.x (write_transaction was removed). Pin a verified matrix and run on an
+    # isolated interpreter. `inherit` is unusable across a process boundary,
+    # so everything is declared explicitly.
+    requires-python: ">=3.12"
+    isolation: subprocess
+    packages:
+      - "promg==1.0.10"
+      - "neo4j>=5.15,<6"
+      - "pandas>=2.2.2,<3"
+      - "numpy>=1.26,<3"
+      - "pyarrow>=17" # read the host→worker Parquet event-log handoff
+    inherit: []
+  npm: []
+
+frontend:
+  panel: ./panel/index.tsx
+
+permissions:
+  - read:event_log
+  - write:module_results
+
+# The event log never leaves the machine: the graph sidecar is a local compose
+# service and the graph is wiped after each run. (If an admin points bolt_uri at
+# a remote server, that guarantee is theirs to keep.)
+isConfidentialSafe: true
+
+# Subprocess routes cannot take typed request bodies, so the panel writes these
+# via PUT /api/v1/modules/actor_performance/config and the @job reads ctx.config.
+config_schema:
+  properties:
+    bolt_uri:
+      type: string
+      title: Neo4j bolt URI
+      description: 'Leave empty for automatic: the MATE_NEO4J_URI environment default (docker: bolt://neo4j:7687), else bolt://localhost:7687.'
+      default: ""
+    username:
+      type: string
+      title: Neo4j user
+      default: neo4j
+    password:
+      type: string
+      title: Neo4j password
+      description: Leave empty to use the platform's MATE_NEO4J_PASSWORD default.
+      default: ""
+      ui:
+        widget: password
+    import_dir:
+      type: string
+      title: Shared import directory
+      description: 'Directory shared with the Neo4j server as its import dir. Leave empty for automatic: MATE_NEO4J_IMPORT_DIR (docker: /app/data/neo4j-import), else ./data/neo4j-import.'
+      default: ""
+    edge_min_freq:
+      type: integer
+      title: Minimum transition frequency
+      description: Only decompose transitions (activity pairs) occurring at least this often. The paper used 1000 on the full BPIC17; 0 keeps every transition.
+      minimum: 0
+      maximum: 100000
+      default: 0
+    max_edges:
+      type: integer
+      title: Max transitions to extract
+      description: Cap on distinct transitions analyzed (most frequent first) to bound run time on very diverse logs.
+      minimum: 10
+      maximum: 1000
+      default: 150

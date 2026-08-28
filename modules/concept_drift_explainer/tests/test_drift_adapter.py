@@ -10,6 +10,11 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
+# The imports below reach into the module's own venv deps (langchain_core et al.), which
+# the platform venv does not carry. Skip instead of failing collection so
+# `uv run pytest modules/concept_drift_explainer/tests` stays runnable from the
+# repo's toolchain; the full suite runs on the module venv.
+pytest.importorskip("langchain_core")
 from modules.concept_drift_explainer.agents.drift_agent import (
     _canonical_drift_type,
     _dominant_activity_in_window,

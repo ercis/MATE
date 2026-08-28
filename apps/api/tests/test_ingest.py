@@ -253,3 +253,57 @@ async def test_list_and_delete(client: AsyncClient) -> None:
 
     after = await client.get(f"/api/v1/event-logs/{log_id}")
     assert after.status_code == 404
+
+
+def test_to_datetime_robust_mixed_precision() -> None:
+    """pandas >=2 infers one format from the first value - a column mixing
+    whole-second and fractional-second stamps must NOT NaT the rest."""
+    import pandas as pd
+
+    from mate.api.ingest.parquet_coerce import to_datetime_robust
+
+    series = pd.Series(
+        [
+            "2023-04-20 08:00:00+00:00",
+            "2023-04-20 08:14:14.736853625+00:00",
+            "2023-04-20 08:34:48.002094331+00:00",
+        ]
+    )
+    parsed = to_datetime_robust(series, utc=True)
+    assert parsed.notna().all(), parsed
+
+    # Junk stays NaT; parseable neighbours still survive.
+    messy = pd.Series(["2023-04-20 08:00:00", "not a date", "2023-04-20 09:00:00.5"])
+    parsed = to_datetime_robust(messy, utc=True)
+    assert parsed.notna().tolist() == [True, False, True]
+
+    # An explicit format is honoured verbatim (no mixed retry).
+    fmt = pd.Series(["20.04.2023 08:00", "2023-04-20 09:00:00"])
+    parsed = to_datetime_robust(fmt, format="%d.%m.%Y %H:%M", utc=True)
+    assert parsed.notna().tolist() == [True, False]
+
+
+@pytest.mark.asyncio
+async def test_csv_mixed_timestamp_precision_keeps_all_rows(client: AsyncClient) -> None:
+    """Regression: first row whole-second, later rows nanosecond fractions -
+    the import used to NaT-drop every fractional row, leaving one activity."""
+    csv = (
+        "case_id,activity_name,start_timestamp\n"
+        "1,Register,2023-04-20 08:00:00+00:00\n"
+        "1,Check,2023-04-20 08:14:14.736853625+00:00\n"
+        "1,Approve,2023-04-20 08:34:48.002094331+00:00\n"
+        "2,Register,2023-04-20 08:30:00+00:00\n"
+        "2,Check,2023-04-20 08:45:12.111222333+00:00\n"
+    )
+    resp = await client.post(
+        "/api/v1/event-logs",
+        files={"file": ("mixed_ts.csv", csv.encode(), "text/csv")},
+        data={"name": "Mixed timestamp precision"},
+    )
+    assert resp.status_code == 202, resp.text
+    log_id = resp.json()["log_id"]
+    detail = await _wait_until_ready(client, log_id)
+    assert detail["events_count"] == 5
+    assert detail["cases_count"] == 2
+    schema = detail.get("detected_schema") or {}
+    assert schema.get("rows_dropped_invalid_timestamp") == 0

@@ -11,6 +11,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/cn";
+import { prefetchModulePanel } from "@/lib/module-panels";
 import { hasActiveModuleJob, useJobsStore } from "@/lib/stores/jobs";
 import type { ModuleSummary } from "@/lib/api-types";
 
@@ -34,7 +35,7 @@ export function ModuleCard({ module, logId }: ModuleCardProps) {
   const tooltipReasons = isJobRunning
     ? ["A job for this module is currently running. Wait for it to finish before opening."]
     : isDisabled
-    ? ["Disabled in Settings → Modules. Enable it to open the module page."]
+    ? ["Disabled on the Modules page. Enable it there to open the module."]
     : reasons;
 
   // A real <Link> (not router.push) so navigation flows through an <a>: that
@@ -46,25 +47,21 @@ export function ModuleCard({ module, logId }: ModuleCardProps) {
 
   const card = (
     <Card
+      data-tour={`module-${module.id}`}
       className={cn(
         // Tile-style card: drop the default outer py/gap so CardContent's
         // p-4 fully owns the card's padding.
         "group relative flex h-full flex-col gap-0 py-0 transition-all",
-        isAvailable && "cursor-pointer hover:-translate-y-0.5 hover:shadow-md",
-        isDegraded && "cursor-pointer hover:shadow-md",
+        isAvailable && "cursor-pointer hover:-translate-y-0.5 hover:shadow-lg",
+        isDegraded && "cursor-pointer hover:shadow-lg",
         (isUnavailable || isDisabled || isJobRunning) && "cursor-not-allowed opacity-60",
       )}
       aria-disabled={isUnavailable || isDisabled || isJobRunning}
     >
       <CardContent className="flex h-full flex-col gap-3 p-4">
-        {/* Header: Name, version, author */}
+        {/* Header: Name */}
         <div className="min-w-0">
           <h3 className="truncate text-sm font-semibold leading-tight">{module.name}</h3>
-          <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
-            {module.version && <span className="shrink-0">{module.version}</span>}
-            {module.author && module.version && <span className="shrink-0 text-muted-foreground/50">·</span>}
-            {module.author && <span className="truncate">by {module.author}</span>}
-          </div>
         </div>
 
         {/* Status */}
@@ -102,9 +99,15 @@ export function ModuleCard({ module, logId }: ModuleCardProps) {
     </Card>
   );
 
+  // Warm the panel bundle on hover/focus intent so the module page renders
+  // without the fetch+eval stall. Same idea as the sidebar's data prefetch.
+  const warmPanel = module.has_frontend ? () => prefetchModulePanel(module.id) : undefined;
+
   const content = navigable ? (
     <Link
       href={href}
+      onMouseEnter={warmPanel}
+      onFocus={warmPanel}
       className="block h-full rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
     >
       {card}

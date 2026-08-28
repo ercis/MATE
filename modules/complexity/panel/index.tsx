@@ -8,6 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { formatDuration, formatNumber } from "@/lib/format";
 
+import { MetricInfoHint } from "./metric-info";
 import { useComplexityMetrics, type ComplexityMetrics } from "./queries";
 
 export function ComplexityPanel({ logId }: { logId: string; moduleId: string }) {
@@ -38,14 +39,7 @@ export function ComplexityPanel({ logId }: { logId: string; moduleId: string }) 
 
   return (
     <div className="space-y-6">
-      <header className="flex flex-wrap items-end justify-between gap-3">
-        <div className="space-y-1">
-          <h2 className="text-lg font-semibold">Complexity</h2>
-          <p className="text-xs text-muted-foreground">
-            Variant / sequence entropy, Pentland and structural measures
-            built on the Extended Prefix Automaton. After Rüschel &amp; Langer.
-          </p>
-        </div>
+      <header className="flex flex-wrap items-center justify-end gap-3">
         {enriched_supported ? (
           <Badge variant="secondary" className="gap-1.5">
             <Info className="h-3 w-3" />
@@ -94,23 +88,27 @@ function MetricsView({ metrics }: { metrics: ComplexityMetrics }) {
 
 function EntropyTable({ metrics }: { metrics: ComplexityMetrics }) {
   const k = metrics.exponential_k;
-  const rows: { label: string; raw: number | null; norm: number | null }[] = [
+  const rows: { key: string; label: string; raw: number | null; norm: number | null }[] = [
     {
+      key: "variant_entropy",
       label: "Variant entropy",
       raw: metrics.variant_entropy,
       norm: metrics.normalized_variant_entropy,
     },
     {
+      key: "sequence_entropy",
       label: "Sequence entropy",
       raw: metrics.sequence_entropy,
       norm: metrics.normalized_sequence_entropy,
     },
     {
+      key: "sequence_entropy_linear",
       label: "Sequence entropy (linear forgetting)",
       raw: metrics.sequence_entropy_linear,
       norm: metrics.normalized_sequence_entropy_linear,
     },
     {
+      key: "sequence_entropy_exponential",
       label: `Sequence entropy (exponential forgetting, k=${formatK(k)})`,
       raw: metrics.sequence_entropy_exponential,
       norm: metrics.normalized_sequence_entropy_exponential,
@@ -127,13 +125,18 @@ function EntropyTable({ metrics }: { metrics: ComplexityMetrics }) {
               <tr>
                 <th className="py-1.5 pr-4 font-medium">Measure</th>
                 <th className="py-1.5 pr-4 font-medium tabular-nums">Value</th>
-                <th className="py-1.5 font-medium tabular-nums">Normalised</th>
+                <th className="py-1.5 font-medium tabular-nums">Normalised (0–1)</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.label} className="border-t border-border/60">
-                  <td className="py-1.5 pr-4">{r.label}</td>
+                <tr key={r.key} className="border-t border-border/60">
+                  <td className="py-1.5 pr-4">
+                    <span className="inline-flex items-center gap-1.5">
+                      {r.label}
+                      <MetricInfoHint metricKey={r.key} />
+                    </span>
+                  </td>
                   <td className="py-1.5 pr-4 tabular-nums">{fmt(r.raw, 3)}</td>
                   <td className="py-1.5 tabular-nums">{fmt(r.norm, 3)}</td>
                 </tr>
@@ -147,43 +150,51 @@ function EntropyTable({ metrics }: { metrics: ComplexityMetrics }) {
 }
 
 function StructuralTable({ metrics }: { metrics: ComplexityMetrics }) {
-  const rows: { label: string; value: string; description: string }[] = [
+  const rows: { key: string; label: string; value: string; description: string }[] = [
     {
+      key: "magnitude",
       label: "Magnitude",
       value: formatNumber(metrics.magnitude),
       description: "Total events",
     },
     {
+      key: "support",
       label: "Support",
       value: formatNumber(metrics.support),
       description: "Cases",
     },
     {
+      key: "variety",
       label: "Variety",
       value: formatNumber(metrics.variety),
       description: "Distinct activities",
     },
     {
+      key: "level_of_detail",
       label: "Level of detail",
       value: fmt(metrics.level_of_detail, 3),
       description: "Avg distinct activities per case",
     },
     {
+      key: "time_granularity",
       label: "Time granularity",
       value: formatDuration(metrics.time_granularity_s),
       description: "Mean per-case min inter-event gap",
     },
     {
+      key: "structure",
       label: "Structure",
       value: fmt(metrics.structure, 3),
       description: "1 − |DF edges| / variety²",
     },
     {
+      key: "affinity",
       label: "Affinity",
       value: fmt(metrics.affinity, 3),
       description: "Weighted Jaccard on DF patterns",
     },
     {
+      key: "trace_length",
       label: "Trace length",
       value: `${fmt(metrics.trace_length_min, 0)} / ${fmt(
         metrics.trace_length_avg,
@@ -192,26 +203,31 @@ function StructuralTable({ metrics }: { metrics: ComplexityMetrics }) {
       description: "min / avg / max",
     },
     {
+      key: "distinct_traces_pct",
       label: "Distinct traces",
       value: `${fmt(metrics.distinct_traces_pct, 2)} %`,
       description: "Unique variants / cases",
     },
     {
+      key: "deviation_from_random",
       label: "Deviation from random",
       value: fmt(metrics.deviation_from_random, 3),
       description: "1 − ‖transition – uniform‖",
     },
     {
+      key: "lempel_ziv",
       label: "Lempel-Ziv complexity",
       value: formatNumber(metrics.lempel_ziv),
       description: "LZ76 phrases (time-ordered)",
     },
     {
+      key: "pentland_task",
       label: "Pentland's task complexity",
       value: formatNumber(metrics.pentland_task),
       description: "Sum of leaf-state frequencies in prefix automaton",
     },
     {
+      key: "pentland_process",
       label: "Pentland's process complexity",
       value: fmt(metrics.pentland_process, 3),
       description: "10^(0.08·(1 + |DF edges| − variety))",
@@ -233,8 +249,13 @@ function StructuralTable({ metrics }: { metrics: ComplexityMetrics }) {
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.label} className="border-t border-border/60">
-                  <td className="py-1.5 pr-4">{r.label}</td>
+                <tr key={r.key} className="border-t border-border/60">
+                  <td className="py-1.5 pr-4">
+                    <span className="inline-flex items-center gap-1.5">
+                      {r.label}
+                      <MetricInfoHint metricKey={r.key} />
+                    </span>
+                  </td>
                   <td className="py-1.5 pr-4 tabular-nums">{r.value}</td>
                   <td className="py-1.5 text-xs text-muted-foreground">
                     {r.description}

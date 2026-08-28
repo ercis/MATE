@@ -1,17 +1,15 @@
-import pandas as pd
-import numpy as np
-from typing import List
 import math
 import sys
 from collections import Counter
 from enum import Enum
-from typing import Union, Optional
 
+import numpy as np
+import pandas as pd
 import scipy.stats as st
 from scipy.stats import wasserstein_distance
 
 
-def get_inter_arrival_times(event_log: pd.DataFrame) -> List[float]:
+def get_inter_arrival_times(event_log: pd.DataFrame) -> list[float]:
     # Get the arrival times from the event log
     arrival_times = []
     for case_id, events in event_log.groupby('case_id'):
@@ -89,12 +87,12 @@ class DistributionType(Enum):
 class DurationDistribution:
     def __init__(
         self,
-        name: Union[str, DistributionType] = "fix",
-        mean: Optional[float] = None,
-        var: Optional[float] = None,
-        std: Optional[float] = None,
-        minimum: Optional[float] = None,
-        maximum: Optional[float] = None
+        name: str | DistributionType = "fix",
+        mean: float | None = None,
+        var: float | None = None,
+        std: float | None = None,
+        minimum: float | None = None,
+        maximum: float | None = None
     ):
         self.type = DistributionType.from_string(name) if isinstance(name, str) else name
         self.mean = mean
@@ -244,15 +242,7 @@ class DurationDistribution:
                 minimum=float(distr_params[2]["value"]),
                 maximum=float(distr_params[3]["value"]),
             )
-        elif distr_name == DistributionType.LOG_NORMAL:
-            distribution = DurationDistribution(
-                name=distr_name,
-                mean=float(distr_params[0]["value"]),
-                var=float(distr_params[1]["value"]),
-                minimum=float(distr_params[2]["value"]),
-                maximum=float(distr_params[3]["value"]),
-            )
-        elif distr_name == DistributionType.GAMMA:
+        elif distr_name == DistributionType.LOG_NORMAL or distr_name == DistributionType.GAMMA:
             distribution = DurationDistribution(
                 name=distr_name,
                 mean=float(distr_params[0]["value"]),
@@ -264,9 +254,7 @@ class DurationDistribution:
         return distribution
 
     def __str__(self):
-        return "DurationDistribution(name: {}, mean: {}, var: {}, std: {}, min: {}, max: {})".format(
-            self.type.value, self.mean, self.var, self.std, self.min, self.max
-        )
+        return f"DurationDistribution(name: {self.type.value}, mean: {self.mean}, var: {self.var}, std: {self.std}, min: {self.min}, max: {self.max})"
 
 
 

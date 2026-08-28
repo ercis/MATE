@@ -16,6 +16,7 @@ Differences from the upstream code:
 
 from __future__ import annotations
 
+import contextlib
 import io
 import threading
 from pathlib import Path
@@ -29,12 +30,14 @@ from PIL import Image, ImageDraw, ImageFont
 TARGETSIZE = 256
 INPUT_SIZE = (256, 256)
 
+# fmt: off - the aligned columns below are read as a table; see the LUT note.
 CATEGORY_INDEX = {
-    1: {"name": "sudden",      "color": (255, 255, 255)},  # white
-    2: {"name": "gradual",     "color": (30, 144, 255)},   # dodgerblue
-    3: {"name": "incremental", "color": (255, 0, 255)},    # magenta
-    4: {"name": "recurring",   "color": (0, 255, 255)},    # aqua
+    1: {"name": "sudden", "color": (255, 255, 255)},  # white
+    2: {"name": "gradual", "color": (30, 144, 255)},  # dodgerblue
+    3: {"name": "incremental", "color": (255, 0, 255)},  # magenta
+    4: {"name": "recurring", "color": (0, 255, 255)},  # aqua
 }
+# fmt: on
 
 
 # ---------------------------------------------------------------------------
@@ -56,12 +59,20 @@ def log_to_windowed_dfg_count(
     act_idx = {a: i for i, a in enumerate(activities)}
     n_acts = len(activities)
 
-    # Sort events by timestamp to get traces in chronological order,
-    # mirroring pm4py's TIMESTAMP_SORT behaviour in the reference repo.
-    # Must use mergesort (stable) - quicksort (pandas default) breaks ties
-    # arbitrarily, producing a different trace order from the reference for
-    # the ~17 traces that all start at 2017-01-01 00:00:00.
-    df_ts = df.sort_values("timestamp", kind="mergesort").reset_index(drop=True)
+    # Trace order IS the x-axis of the similarity image: WINSIM cuts windows of
+    # equal trace count, so windowing a log in the wrong trace order produces a
+    # meaningless image. Sorting the events by timestamp and taking the case
+    # column in first-appearance order reproduces pm4py's TIMESTAMP_SORT (sort
+    # events per trace, then traces by first event) used by the reference repo.
+    #
+    # Repeated here even though `_load_sorted_df` already sorts: this function is
+    # the public encoding entry point and must never depend on how the caller
+    # happened to order its rows. `(timestamp, case_id)` with a stable mergesort
+    # makes the result a pure function of the data - a plain timestamp sort would
+    # inherit the incoming row order for traces sharing a start timestamp (common
+    # when a log carries a placeholder date), and `events.parquet` arrives sorted
+    # by `(case_id, timestamp)`, whose raw row order is alphabetical.
+    df_ts = df.sort_values(["timestamp", "case_id"], kind="mergesort").reset_index(drop=True)
     unique_traces = list(pd.unique(df_ts["case_id"]))
 
     window_size = max(1, len(unique_traces) // n_windows)
@@ -142,6 +153,7 @@ def _viridis_lut() -> np.ndarray:
     which is critical: even a 1-pixel deviation shifts detection boxes by
     10+ windows on the InternationalDeclarations benchmark log.
     """
+    # fmt: off
     data = np.array([
         (68,1,84),(68,2,85),(68,3,87),(69,5,88),(69,6,90),(69,8,91),(70,9,92),
         (70,11,94),(70,12,95),(70,14,97),(71,15,98),(71,17,99),(71,18,101),
@@ -187,6 +199,7 @@ def _viridis_lut() -> np.ndarray:
         (233,228,25),(236,228,26),(238,229,27),(241,229,28),(243,229,30),(246,230,31),
         (248,230,33),(250,230,34),(253,231,36),
     ], dtype=np.uint8)
+    # fmt: on
     return data
 
 
@@ -223,7 +236,7 @@ def _matrix_to_model_jpeg(matrix: np.ndarray) -> bytes:
 # ---------------------------------------------------------------------------
 
 
-def _resize_for_model(jpeg_bytes: bytes) -> "Any":  # noqa: F821 - tf is imported lazily
+def _resize_for_model(jpeg_bytes: bytes) -> Any:
     """PIL-decode JPEG → TF bilinear resize → uint8 batch tensor (1, 256, 256, 3).
 
     Matches the reference repo exactly:
@@ -264,10 +277,10 @@ def predict_drifts(
     classes = classes[keep]
 
     def to_window(pixel: float) -> int:
-        return max(1, min(n_windows, int(round(pixel / TARGETSIZE * n_windows))))
+        return max(1, min(n_windows, round(pixel / TARGETSIZE * n_windows)))
 
     drifts: list[dict[str, Any]] = []
-    for box, cls, score in zip(boxes, classes, scores):
+    for box, cls, score in zip(boxes, classes, scores, strict=True):
         ymin, xmin, ymax, xmax = (float(v) for v in box)
         cls_name = CATEGORY_INDEX.get(int(cls), {}).get("name", "unknown")
 
@@ -327,9 +340,7 @@ def render_overlay(image_bytes: bytes, drifts: list[dict[str, Any]]) -> bytes:
         font = ImageFont.truetype("DejaVuSans-Bold.ttf", 18)
     except OSError:
         try:
-            font = ImageFont.truetype(
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18
-            )
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18)
         except OSError:
             font = ImageFont.load_default()
 
@@ -341,7 +352,7 @@ def render_overlay(image_bytes: bytes, drifts: list[dict[str, Any]]) -> bytes:
 
         draw.rectangle([xmin, ymin, xmax, ymax], outline=colour, width=3)
 
-        label = f'{d["type"]}: {int(d["confidence"] * 100)}%'
+        label = f"{d['type']}: {int(d['confidence'] * 100)}%"
         bbox = draw.textbbox((xmin, max(0, ymin - 22)), label, font=font)
         # Translucent background behind the label so it's readable on any colour
         pad = 2
@@ -405,12 +416,12 @@ def run_detection(
         ``{"drifts": [...], "similarity_png": bytes, "overlay_png": bytes,
            "n_windows": int}``.
     """
+
     def _emit(p: float, msg: str) -> None:
+        # Best-effort: a broken progress callback must never fail the detection.
         if progress is not None:
-            try:
+            with contextlib.suppress(Exception):
                 progress(p, msg)
-            except Exception:  # noqa: BLE001 - progress is best-effort
-                pass
 
     _emit(0.15, "Windowing the event log")
     windowed_dfg, window_information = log_to_windowed_dfg_count(df, n_windows)
@@ -419,8 +430,8 @@ def run_detection(
     sim_matrix = similarity_calculation(windowed_dfg)
 
     _emit(0.55, "Encoding image")
-    image_bytes = matrix_to_image_bytes(sim_matrix)   # PNG for display/overlay
-    model_jpeg = _matrix_to_model_jpeg(sim_matrix)    # JPEG for model inference
+    image_bytes = matrix_to_image_bytes(sim_matrix)  # PNG for display/overlay
+    model_jpeg = _matrix_to_model_jpeg(sim_matrix)  # JPEG for model inference
 
     _emit(0.65, "Loading model")
     model = _get_model(model_path)

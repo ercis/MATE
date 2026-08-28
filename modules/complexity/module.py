@@ -18,6 +18,7 @@ panel open.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from pathlib import Path
 from typing import Any
@@ -27,8 +28,8 @@ from mate.sdk import Module, ModuleContext, job, on_event, route
 from .complexity_core import compute_basic_metrics
 from .enriched_core import compute_enriched_metrics, is_enriched_supported
 
-
 # ── Cache helpers (mirrors performance / discovery pattern) ──────────────────
+
 
 def _cache_is_fresh(ctx: ModuleContext, key: str) -> bool:
     cache_root = Path(ctx.cache.dir) if hasattr(ctx.cache, "dir") else None  # type: ignore[attr-defined]
@@ -82,6 +83,7 @@ def _exponential_k(ctx: ModuleContext) -> float:
 
 # ── Module ───────────────────────────────────────────────────────────────────
 
+
 class ComplexityModule(Module):
     id = "complexity"
 
@@ -125,13 +127,29 @@ class ComplexityModule(Module):
         async with ctx.event_log as log:
             df = await log.pandas()
 
+        # Forward the compute thread's coarse per-stage ticks to the job's
+        # progress stream (scaled into [0.05, 0.9]) so a slow log shows live
+        # stages instead of an apparently stalled bar.
+        loop = asyncio.get_running_loop()
+        basic_span = 0.7 if enriched_supported else 1.0
+
+        def report(fraction: float, message: str) -> None:
+            with contextlib.suppress(RuntimeError):
+                asyncio.run_coroutine_threadsafe(
+                    ctx.progress.update(0.05 + min(max(fraction, 0.0), 1.0) * 0.85, message),
+                    loop,
+                )
+
         def _run() -> dict[str, Any]:
-            basic = compute_basic_metrics(df, exponential_k=k)
-            enriched = (
-                compute_enriched_metrics(df, exponential_k=k)
-                if enriched_supported
-                else None
+            basic = compute_basic_metrics(
+                df,
+                exponential_k=k,
+                progress=lambda f, m: report(f * basic_span, m),
             )
+            enriched = None
+            if enriched_supported:
+                report(0.75, "Computing enriched entropies")
+                enriched = compute_enriched_metrics(df, exponential_k=k, basic_metrics=basic)
             return {
                 "kind": "complexity_metrics",
                 "basic": basic,

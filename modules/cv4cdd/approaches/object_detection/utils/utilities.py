@@ -1,21 +1,17 @@
-import os
-import json
 import datetime as dt
-import pytz
-import pandas as pd
-import tensorflow as tf
+import os
+
 import matplotlib.pyplot as plt
 import numpy as np
-
-from PIL import Image
-from typing import Union, Tuple
-from pm4py.objects.log.obj import EventLog
-from pm4py.objects.log.importer.xes import importer as xes_importer
-from pm4py.algo.filtering.log.attributes import attributes_filter
-from pm4py import discover_dfg_typed
+import pandas as pd
+import pytz
 from official.vision.dataloaders.tf_example_decoder import TfExampleDecoder
 from official.vision.ops.preprocess_ops import resize_and_crop_image
-
+from PIL import Image
+from pm4py import discover_dfg_typed
+from pm4py.algo.filtering.log.attributes import attributes_filter
+from pm4py.objects.log.importer.xes import importer as xes_importer
+from pm4py.objects.log.obj import EventLog
 
 # ---------------------------------------------------------------------------
 # Event log I/O
@@ -135,7 +131,7 @@ def build_inputs_for_object_detection(image, input_image_size):
 # Model / decoder helpers
 # ---------------------------------------------------------------------------
 
-def get_ex_decoder() -> Tuple[dict, TfExampleDecoder]:
+def get_ex_decoder() -> tuple[dict, TfExampleDecoder]:
     """Return the category index (drift-type mapping) and a TfExampleDecoder."""
     category_index = {
         1: {"id": 1, "name": "sudden",      "color": "white"},

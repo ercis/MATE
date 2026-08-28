@@ -4,7 +4,8 @@ import { useEffect, useState, type ComponentType } from "react";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import { rawFetch } from "@/lib/api";
-import { installModuleRuntime } from "@/lib/module-runtime";
+import type { DrillHandler } from "@/lib/dashboards/drill";
+import { CORE_EXTERNALS, installModuleRuntime, scanBundleExternals } from "@/lib/module-runtime";
 
 /**
  * Cross-module widget loader (§7.7).
@@ -34,6 +35,20 @@ export interface WidgetProps {
   logId?: string;
   moduleId?: string;
   config?: Record<string, unknown>;
+  /**
+   * Navigate from a clicked mark to the page that explains it.
+   *
+   * Supplied by the dashboard; **undefined when the widget is embedded
+   * elsewhere** (a panel using `useWidget`), so always call it optionally:
+   *
+   *   <KpiTile … onClick={() => onDrill?.({ params: { activity } })} />
+   *
+   * Calling it with no argument opens this card's own module for the bound
+   * log. See `lib/dashboards/drill.ts` for the standard parameter names —
+   * prefer those over inventing one, since cross-module links only work when
+   * both sides agree (`discovery` → `performance` via `?activity=`).
+   */
+  onDrill?: DrillHandler;
   [key: string]: unknown;
 }
 
@@ -71,7 +86,11 @@ async function loadWidget(moduleId: string, widgetId: string): Promise<WidgetCom
   if (pending) return pending;
 
   const promise = (async () => {
-    await installModuleRuntime();
+    // Core externals stream in parallel with the bundle; the rest comes from
+    // the bundle's own require() calls (see module-panels.tsx). A dashboard
+    // mounts many widgets at once, so the per-specifier dedupe in
+    // installModuleRuntime() is what keeps that to one import each.
+    const core = installModuleRuntime(CORE_EXTERNALS);
     const url = `/api/v1/modules/${encodeURIComponent(moduleId)}/assets/widget-${encodeURIComponent(widgetId)}.js`;
     const res = await rawFetch(url);
     if (!res.ok) {
@@ -81,6 +100,7 @@ async function loadWidget(moduleId: string, widgetId: string): Promise<WidgetCom
       );
     }
     const source = await res.text();
+    await Promise.all([core, installModuleRuntime(scanBundleExternals(source))]);
     const moduleObj: { exports: Record<string, unknown> } = { exports: {} };
     const factory = new Function(
       "module",

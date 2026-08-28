@@ -2,7 +2,7 @@
 #
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 #
-# It does four things on top of the base compose file:
+# It does five things on top of the base compose file:
 #   1. Adds the `proxy` (Caddy) container that terminates TLS on :443 and
 #      routes one origin to web/api/keycloak by path.
 #   2. Stops publishing 3000/8000/8080 publicly – they're reached only through
@@ -10,15 +10,38 @@
 #   3. Repoints every browser-facing URL at https://pm-mate.uni-muenster.de
 #      (single same-origin) and moves Keycloak under /auth.
 #   4. Drops the macOS-only cv4cdd model bind mount from the base file.
+#   5. Caps per-container memory and bounds the API's in-process fan-out,
+#      so one runaway analysis can no longer take the whole 15 GiB VM down
+#      with it (see the `x-log` anchor and the api `environment:` block).
 #
 # Secrets (AUTH_SECRET, KEYCLOAK_CLIENT_SECRET, KEYCLOAK_DB_PASSWORD,
 # KEYCLOAK_ADMIN_PASSWORD) stay in .env – see DEPLOY.md §4.
 
+# Container logs: the json-file driver's default is unbounded, and the VM's
+# disk was at ~70%. Applied per service below (compose has no global default).
+x-log: &log
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   proxy:
-    image: caddy:2-alpine
+    # Pinned to the 2.11 minor: the bare `caddy:2-alpine` tag silently rolled
+    # to v2.11.3 and its stricter parser crash-looped on the old encode syntax
+    # (fixed in infra/caddy/Caddyfile). Bump this deliberately after checking
+    # the Caddyfile against the new parser: `caddy validate --adapter caddyfile`.
+    image: caddy:2.11-alpine
     container_name: mate-proxy
     restart: unless-stopped
+    mem_limit: 128m
+    memswap_limit: 128m
+    logging: *log
+    environment:
+      # Let's Encrypt live dir for the VM's own cert, e.g.
+      # /etc/letsencrypt/live/<vm-hostname>. Set in .env on the VM - kept out
+      # of the repo, which is public. Caddy reads it as {$TLS_CERT_DIR}.
+      TLS_CERT_DIR: ${TLS_CERT_DIR:?set TLS_CERT_DIR in .env - see docs/DEPLOY.md}
     # Resolve the public hostname to this Caddy container on the internal
     # network, so the web container's server-side OIDC calls reach Keycloak
     # on-box (via Caddy) instead of hairpinning through the uni proxy.
@@ -28,11 +51,6 @@ services:
           - pm-mate.uni-muenster.de
     ports:
       - "443:443"
-    environment:
-      # Let's Encrypt live dir for the VM's own cert, e.g.
-      # /etc/letsencrypt/live/<vm-hostname>. Set in .env on the VM - kept out
-      # of the repo, which is public. Caddy reads it as {$TLS_CERT_DIR}.
-      TLS_CERT_DIR: ${TLS_CERT_DIR:?set TLS_CERT_DIR in .env - see DEPLOY.md}
     volumes:
       - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       # Mount the whole letsencrypt dir, not just live/: live/ is symlinks
@@ -42,13 +60,18 @@ services:
       - caddy-config:/config
     depends_on:
       web:
-        condition: service_started
+        # The base compose defines the web healthcheck (login-page probe), so
+        # the proxy only fronts a web container that actually answers.
+        condition: service_healthy
       api:
         condition: service_healthy
       keycloak:
         condition: service_healthy
 
   web:
+    mem_limit: 768m
+    memswap_limit: 768m
+    logging: *log
     build:
       args:
         # Inlined into the client bundle at build time – the browser hits the
@@ -68,22 +91,83 @@ services:
       # single-use code ("Code not valid"). The proxy service carries a docker
       # network alias for the public hostname (see below), so these calls
       # resolve to our Caddy on the internal network instead. Caddy serves the
-      # VM cert (name mismatch for pm-mate) → skip verify on this hop.
+      # pm-mate-vm cert (name mismatch for pm-mate) → skip verify on this hop.
+      #
+      # Staged replacement for the line below (see auth.ts KEYCLOAK_INTERNAL_URL):
+      # route the server-side OIDC back-channel straight to Keycloak over the
+      # internal network so there is no HTTPS cert-name-mismatch hop to bypass.
+      # Roll out in order: (1) uncomment the next line + redeploy; (2) verify a
+      # full login AND a token refresh succeed; (3) only THEN delete the
+      # NODE_TLS_REJECT_UNAUTHORIZED line.
+      # KEYCLOAK_INTERNAL_URL: http://keycloak:8080/auth/realms/flows-funds
       NODE_TLS_REJECT_UNAUTHORIZED: "0"
-      # Sessions are client-side cookie JWE (Auth.js default): SESSION_STORE_DIR is
-      # intentionally unset. The full access+refresh cookie (chunked if >4KB) now
-      # fits the uni edge proxy's enlarged header buffer, so the on-disk store
-      # (Option 3, the 502 workaround) is no longer needed. To revert, restore
-      # SESSION_STORE_DIR + the ./data/web-sessions volume.
+      # Server-side session store (Option 3): the Auth.js session cookie carries
+      # ONLY an opaque id; the access+refresh JWT lives on disk under
+      # SESSION_STORE_DIR (the ./data/web-sessions volume below). Re-enabled
+      # 2026-07-05 to fix a Safari-only infinite /login redirect loop — the
+      # cookie-JWE default chunks the full Keycloak token past 4KB, and Safari
+      # evicts/drops the chunked __Secure-authjs.session-token.N cookies where
+      # Chrome tolerates them, so auth() can't reassemble+decode the session and
+      # bounces to /login forever. The ~64 B id cookie sidesteps every browser
+      # per-cookie/per-domain size limit. (The uni edge proxy's header buffer was
+      # already enlarged, so the original 502 driver for this store is moot.)
+      # DO NOT unset again without re-testing login in Safari.
+      SESSION_STORE_DIR: /app/sessions
+    volumes:
+      # Backs SESSION_STORE_DIR above — one JSON file per session. Merges with
+      # the base web service's ./modules mount (compose concatenates volume lists).
+      - ./data/web-sessions:/app/sessions
     ports: !reset []
 
   api:
+    # 8 GiB of the VM's 15 GiB. Sized so the four capped services total
+    # ~10.4 GiB, leaving headroom for the host and for `pnpm build` during
+    # a deploy. Equal mem/memswap => no swap for this container.
+    mem_limit: 8g
+    memswap_limit: 8g
+    logging: *log
     environment:
+      FORWARDED_ALLOW_IPS: "*"
+      # Force production mode on the VM. The deployed `.env` (secrets) may still
+      # carry `env=dev`, and pydantic-settings would read it from the in-image
+      # `/app/.env` – an OS env var outranks the dotenv file, so this pins prod
+      # regardless. `env=dev` starts the modules/ hot-reload watchdog, which on a
+      # prod box reloads modules mid-job and can self-loop on build-artifact
+      # writes (`.installed-hash`, `__pycache__`). Never run the VM in dev.
+      ENV: prod
       CORS_ORIGINS: '["https://pm-mate.uni-muenster.de"]'
       KEYCLOAK_ISSUER: https://pm-mate.uni-muenster.de/auth/realms/flows-funds
       # Internal (container -> container) fetch of the signing keys. Note the
       # /auth prefix – it must match KC_HTTP_RELATIVE_PATH or every token fails.
       KEYCLOAK_JWKS_URL: http://keycloak:8080/auth/realms/flows-funds/protocol/openid-connect/certs
+      # Admin REST client for the "delete user" flow (removes the Keycloak
+      # account too). Provisioned by infra/keycloak/configure-admin-client.sh;
+      # the secret lives in .env. Unset secret => the delete's KC step no-ops
+      # (Mate data is still purged). Same internal /auth base as JWKS above.
+      KEYCLOAK_ADMIN_BASE_URL: http://keycloak:8080/auth
+      KEYCLOAK_REALM: flows-funds
+      KEYCLOAK_ADMIN_CLIENT_ID: ${KEYCLOAK_ADMIN_CLIENT_ID:-flows-funds-admin}
+      KEYCLOAK_ADMIN_CLIENT_SECRET: ${KEYCLOAK_ADMIN_CLIENT_SECRET:-}
+      # ── Memory guards (2026-08-28) ──────────────────────────────────
+      # A `ctx.run_in_process` offload child reached 12.3 GiB anon-RSS and
+      # was OOM-killed host-wide (no cgroup limit existed then) twice in
+      # 25 minutes; the API's own process was never killed. These bound the
+      # fan-out and each engine's appetite:
+      #  - pool 2 (default is `nproc` = 4 on the VM) + 1 offload per user,
+      #    so at most two heavy children can coexist instead of four.
+      #  - DuckDB otherwise takes its default limit of 80% of *host* RAM,
+      #    per connection, with a thread per core. CAVEAT: only DuckDBPool
+      #    reads these; the raw `duckdb.connect(":memory:")` in
+      #    modules/event_log_access.py sets no PRAGMAs and still takes the
+      #    default — that needs a code fix, not an env var.
+      #  - glibc keeps up to 8 arenas per core and never returns them, which
+      #    is a good part of why the API drifts to ~6 GiB RSS over days.
+      MODULE_PROCESS_POOL_SIZE: "2"
+      MAX_OFFLOADS_PER_USER: "1"
+      DUCKDB_MEMORY_LIMIT: "2GB"
+      DUCKDB_THREADS: "2"
+      MALLOC_ARENA_MAX: "2"
+      MALLOC_TRIM_THRESHOLD_: "131072"
     # Stated explicitly for the VM. The CV4CDD model is uploaded at runtime into
     # modules/cv4cdd/model/ (covered by the ./modules mount). Only add a separate
     # host mount here if you keep the model outside the repo, e.g.
@@ -93,7 +177,20 @@ services:
       - ./modules:/app/modules
     ports: !reset []
 
+  # Graph sidecar: internal-only in prod. bolt is plain TCP – it must never be
+  # published; the api reaches it as bolt://neo4j:7687 on the compose network.
+  # (Only merged when the "graph" profile is enabled, same as the base file.)
+  neo4j:
+    profiles: ["graph"]
+    ports: !reset []
+
   keycloak:
+    # Heap is already capped at -Xmx512m (our Temurin base gets kc.sh's
+    # non-container default, not a %-of-RAM one); 1g covers heap + metaspace
+    # + thread stacks. Verified with `jcmd 1 VM.flags`.
+    mem_limit: 1g
+    memswap_limit: 1g
+    logging: *log
     # Debian-based rebuild of the same Keycloak 26.0 – runs on CPUs without
     # x86-64-v2 (the official UBI9 image fatally aborts there). See
     # infra/keycloak/Dockerfile. Remove this block once the VM's CPU model
@@ -119,6 +216,32 @@ services:
       # Drop the base file's "8080" entirely from the merged config.
       KC_HOSTNAME_PORT: !reset null
     ports: !reset []
+
+  keycloak-db:
+    # Postgres for Keycloak only – a handful of tiny tables. Idles at ~30 MiB.
+    mem_limit: 512m
+    memswap_limit: 512m
+    logging: *log
+
+  # One-shot: waits for Keycloak to be healthy, patches the realm hardening
+  # settings that the import-once realm JSON can't change on an existing DB
+  # (sslRequired + session lifetimes), then exits. Reuses the keycloak image so
+  # kcadm.sh + its JRE are already present. `restart: no` → runs once per deploy.
+  keycloak-config:
+    image: mate-keycloak:26-debian
+    build:
+      context: .
+      dockerfile: infra/keycloak/Dockerfile
+    restart: "no"
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+    entrypoint: ["/bin/bash", "/opt/keycloak/apply-realm-hardening.sh"]
+    volumes:
+      - ./infra/keycloak/apply-realm-hardening.sh:/opt/keycloak/apply-realm-hardening.sh:ro
 
 volumes:
   caddy-data:

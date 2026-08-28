@@ -8,6 +8,7 @@ import Link from "next/link";
 import {
   Boxes,
   LayoutDashboard,
+  LayoutTemplate,
   Loader2,
   Plus,
   Share2,
@@ -40,16 +41,11 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { EmptyState } from "@/components/empty-state";
-import { Skeleton } from "@/components/ui/skeleton";
-import {
-  PageContainer,
-  PageHeader,
-  PageTitle,
-  PageDescription,
-  PageActions,
-} from "@/components/page";
+import { CardGridSkeleton } from "@/components/skeletons";
+import { PageContainer, PageHeader, PageActions } from "@/components/page";
 import { cn } from "@/lib/cn";
 import { formatRelative } from "@/lib/format";
+import { stagger } from "@/lib/stagger";
 import {
   canvasSettings,
   useCreateDashboard,
@@ -58,10 +54,12 @@ import {
   useImportDashboard,
   type CanvasSettings,
   type DashboardItem,
+  type DashboardTemplate,
   type LogModel,
 } from "@/lib/dashboard-queries";
-import { useSharedWithMe } from "@/lib/sharing-queries";
-import { ShareDialog } from "@/components/dashboards/share-dialog";
+import { useNoShareTargets, useSharedWithMe } from "@/lib/sharing-queries";
+import { NoTeamShareGate, ShareDialog } from "@/components/dashboards/share-dialog";
+import { TemplatePicker } from "@/components/dashboards/template-picker";
 
 const MODEL_OPTIONS: {
   value: LogModel;
@@ -88,6 +86,9 @@ export function DashboardList() {
   const qc = useQueryClient();
   const { data: dashboards, isLoading } = useDashboards();
   const { data: sharedWithMe } = useSharedWithMe();
+  // No team → per-card Share buttons render disabled with a "join a team"
+  // tooltip instead of opening a dialog that can't share with anyone.
+  const noTeam = useNoShareTargets();
   const create = useCreateDashboard();
   const del = useDeleteDashboard();
   const importDash = useImportDashboard();
@@ -98,6 +99,8 @@ export function DashboardList() {
   const [model, setModel] = useState<LogModel>("case_centric");
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [shareTarget, setShareTarget] = useState<{ id: string; name: string } | null>(null);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [templatePendingId, setTemplatePendingId] = useState<string | null>(null);
 
   const onCreateOpenChange = (open: boolean) => {
     setCreateOpen(open);
@@ -116,6 +119,26 @@ export function DashboardList() {
       router.push(`/dashboards/${dash.id}`);
     } catch {
       toast.error("Could not create dashboard");
+    }
+  };
+
+  // Instantiate a curated starter board: the server seeds the cards from the
+  // template id, then we navigate into it exactly like a blank create.
+  const onPickTemplate = async (template: DashboardTemplate) => {
+    if (templatePendingId) return;
+    setTemplatePendingId(template.id);
+    try {
+      const dash = await create.mutateAsync({
+        name: template.name,
+        log_model: template.log_model,
+        template_id: template.id,
+      });
+      setTemplatesOpen(false);
+      router.push(`/dashboards/${dash.id}`);
+    } catch {
+      toast.error("Could not create dashboard");
+    } finally {
+      setTemplatePendingId(null);
     }
   };
 
@@ -157,13 +180,7 @@ export function DashboardList() {
 
   return (
     <PageContainer>
-      <PageHeader>
-        <div className="space-y-1">
-          <PageTitle>Dashboards</PageTitle>
-          <PageDescription>
-            Compose cards from any module into a saved, reopenable board.
-          </PageDescription>
-        </div>
+      <PageHeader className="justify-end">
         <PageActions>
           <input
             ref={fileRef}
@@ -180,6 +197,10 @@ export function DashboardList() {
             <Upload className="mr-1.5 h-4 w-4" />
             Import
           </Button>
+          <Button variant="outline" onClick={() => setTemplatesOpen(true)}>
+            <LayoutTemplate className="mr-1.5 h-4 w-4" />
+            Start from template
+          </Button>
           <Button onClick={() => setCreateOpen(true)}>
             <Plus className="mr-1.5 h-4 w-4" />
             New dashboard
@@ -188,11 +209,7 @@ export function DashboardList() {
       </PageHeader>
 
       {isLoading ? (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {[0, 1, 2].map((i) => (
-            <Skeleton key={i} className="h-28 w-full" />
-          ))}
-        </div>
+        <CardGridSkeleton count={6} />
       ) : !dashboards || dashboards.length === 0 ? (
         <EmptyState
           icon={LayoutDashboard}
@@ -204,13 +221,23 @@ export function DashboardList() {
               New dashboard
             </Button>
           }
+          secondaryAction={
+            <Button variant="outline" onClick={() => setTemplatesOpen(true)}>
+              <LayoutTemplate className="mr-1.5 h-4 w-4" />
+              Start from template
+            </Button>
+          }
         />
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {dashboards.map((d) => (
-            <Card
+          {dashboards.map((d, i) => (
+            <div
               key={d.id}
-              className="group relative transition-colors hover:border-primary/40"
+              className="animate-in fade-in-0 slide-in-from-bottom-1 fill-mode-both duration-300"
+              style={stagger(i)}
+            >
+            <Card
+              className="group relative h-full border-white/10 bg-card/70 backdrop-blur-md transition-all [border-top-color:var(--glass-refraction-top)] supports-[backdrop-filter]:bg-card/60 hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md"
               onMouseEnter={() => prefetchDashboard(qc, d.id)}
             >
               <Link href={`/dashboards/${d.id}`} className="absolute inset-0" aria-label={d.name}>
@@ -220,19 +247,23 @@ export function DashboardList() {
                 <div className="flex items-start justify-between gap-2">
                   <CardTitle className="truncate text-base">{d.name}</CardTitle>
                   <div className="relative z-10 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      aria-label={`Share ${d.name}`}
-                      className="h-7 w-7 text-muted-foreground hover:text-primary"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        setShareTarget({ id: d.id, name: d.name });
-                      }}
-                    >
-                      <Share2 className="h-3.5 w-3.5" />
-                    </Button>
+                    <NoTeamShareGate noTeam={noTeam}>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        aria-label={`Share ${d.name}`}
+                        disabled={noTeam}
+                        aria-disabled={noTeam || undefined}
+                        className="h-7 w-7 text-muted-foreground hover:text-primary"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          setShareTarget({ id: d.id, name: d.name });
+                        }}
+                      >
+                        <Share2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </NoTeamShareGate>
                     <Button
                       type="button"
                       variant="ghost"
@@ -262,6 +293,7 @@ export function DashboardList() {
                 )}
               </CardContent>
             </Card>
+            </div>
           ))}
         </div>
       )}
@@ -274,33 +306,38 @@ export function DashboardList() {
             <h2 className="text-sm font-medium">Shared with me</h2>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {sharedWithMe.map((d) => (
-              <Card
-              key={d.id}
-              className="group relative transition-colors hover:border-primary/40"
-              onMouseEnter={() => prefetchDashboard(qc, d.id)}
-            >
-                <Link
-                  href={`/dashboards/${d.id}`}
-                  className="absolute inset-0"
-                  aria-label={d.name}
+            {sharedWithMe.map((d, i) => (
+              <div
+                key={d.id}
+                className="animate-in fade-in-0 slide-in-from-bottom-1 fill-mode-both duration-300"
+                style={stagger(i)}
+              >
+                <Card
+                  className="group relative h-full border-white/10 bg-card/70 backdrop-blur-md transition-all [border-top-color:var(--glass-refraction-top)] supports-[backdrop-filter]:bg-card/60 hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md"
+                  onMouseEnter={() => prefetchDashboard(qc, d.id)}
                 >
-                  <span className="sr-only">{d.name}</span>
-                </Link>
-                <CardHeader className="pb-2">
-                  <CardTitle className="truncate text-base">{d.name}</CardTitle>
-                </CardHeader>
-                <CardContent className="text-xs text-muted-foreground">
-                  <div className="flex items-center gap-3">
-                    <span className="inline-flex items-center gap-1">
-                      <LayoutDashboard className="h-3.5 w-3.5" />
-                      {d.card_count} card{d.card_count === 1 ? "" : "s"}
-                    </span>
-                    <span>by {d.owner_label}</span>
-                  </div>
-                  {d.description && <p className="mt-2 line-clamp-2">{d.description}</p>}
-                </CardContent>
-              </Card>
+                  <Link
+                    href={`/dashboards/${d.id}`}
+                    className="absolute inset-0"
+                    aria-label={d.name}
+                  >
+                    <span className="sr-only">{d.name}</span>
+                  </Link>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="truncate text-base">{d.name}</CardTitle>
+                  </CardHeader>
+                  <CardContent className="text-xs text-muted-foreground">
+                    <div className="flex items-center gap-3">
+                      <span className="inline-flex items-center gap-1">
+                        <LayoutDashboard className="h-3.5 w-3.5" />
+                        {d.card_count} card{d.card_count === 1 ? "" : "s"}
+                      </span>
+                      <span>by {d.owner_label}</span>
+                    </div>
+                    {d.description && <p className="mt-2 line-clamp-2">{d.description}</p>}
+                  </CardContent>
+                </Card>
+              </div>
             ))}
           </div>
         </div>
@@ -315,6 +352,14 @@ export function DashboardList() {
           onOpenChange={(o) => !o && setShareTarget(null)}
         />
       )}
+
+      {/* Template picker */}
+      <TemplatePicker
+        open={templatesOpen}
+        onOpenChange={setTemplatesOpen}
+        onSelect={onPickTemplate}
+        pendingId={templatePendingId}
+      />
 
       {/* Create dialog */}
       <Dialog open={createOpen} onOpenChange={onCreateOpenChange}>

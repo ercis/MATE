@@ -32,6 +32,30 @@ log = structlog.get_logger(__name__)
 
 _DEBOUNCE_S = 0.5
 
+# A reload re-installs the venv and re-imports `module.py`, which writes build
+# artifacts + bytecode back under `modules/<id>/`. If the watcher reacts to
+# those, it schedules another reload, whose own writes trigger the next - an
+# infinite loop (seen in the wild when a venv skip-check keeps failing and the
+# installer rewrites `.installed-hash` every pass). Match anywhere in the path,
+# not just depth 1: a submodule's `__pycache__` lives deeper than `parts[1]`.
+_IGNORED_DIR_PARTS = frozenset(
+    {".venv", ".dist", "node_modules", "__pycache__", ".git", ".gradle", "build"}
+)
+_IGNORED_NAMES = frozenset({".installed-hash", "pyproject.toml", ".DS_Store"})
+_IGNORED_SUFFIXES = frozenset({".pyc", ".pyo"})
+
+
+def _is_ignored(relative: Path) -> bool:
+    """Whether a changed path (relative to ``modules/``) is a build artifact we
+    must NOT reload on. ``relative.parts[0]`` is the module id; scan the rest for
+    an artifact dir, name, or bytecode suffix. See the module docstring for the
+    loop this prevents."""
+    return (
+        any(part in _IGNORED_DIR_PARTS for part in relative.parts[1:])
+        or relative.name in _IGNORED_NAMES
+        or relative.suffix in _IGNORED_SUFFIXES
+    )
+
 
 class _ModuleEventHandler(FileSystemEventHandler):
     def __init__(self, loader: ModuleLoader, loop: asyncio.AbstractEventLoop) -> None:
@@ -54,9 +78,9 @@ class _ModuleEventHandler(FileSystemEventHandler):
         if not parts:
             return
         module_id = parts[0]
-        # Ignore changes inside `.venv/`, `.dist/`, and `node_modules/` - they
-        # churn during installs and would loop us forever.
-        if len(parts) > 1 and parts[1] in {".venv", ".dist", "node_modules"}:
+        # Skip build artifacts + bytecode the (re)install/​re-import writes back
+        # under the module dir; reacting to them loops the watcher forever.
+        if _is_ignored(relative):
             return
         self._schedule(module_id)
 

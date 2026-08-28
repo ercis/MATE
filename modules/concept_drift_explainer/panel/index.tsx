@@ -1,7 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Brain, Play, Sparkles } from "lucide-react";
+import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
 
 import {
   Card,
@@ -12,12 +14,14 @@ import {
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/empty-state";
+import { subscribeJob } from "@/lib/ws";
 
 import { ChatPanel } from "./chat-panel";
 import { DocumentManager } from "./document-manager";
 import { DriftTable, DriftTypeLegend } from "./drift-table";
 import { ExplanationView } from "./explanation-view";
 import {
+  cdeKeys,
   useCdeDocuments,
   useCdeDrifts,
   useCdeExplanations,
@@ -30,18 +34,20 @@ export function ConceptDriftExplainerPanel({
   logId: string;
   moduleId: string;
 }) {
+  const qc = useQueryClient();
   const driftsQ = useCdeDrifts(logId);
   const docsQ = useCdeDocuments(logId);
   const explanationsQ = useCdeExplanations(logId);
   const runExplain = useRunExplain(logId);
 
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [explainJobId, setExplainJobId] = useState<string | null>(null);
+  const running = Boolean(explainJobId) || runExplain.isPending;
 
   const drifts = driftsQ.data?.drifts ?? [];
   const documents = docsQ.data?.documents ?? [];
   const hasIndexable = documents.some((d) => d.indexable);
   const explanations = explanationsQ.data?.explanations ?? {};
-  const selectedStored = selectedKey ? explanations[selectedKey] : undefined;
 
   const effectiveKey = useMemo(() => {
     if (selectedKey && drifts.some((d) => d.drift_key === selectedKey)) {
@@ -49,6 +55,30 @@ export function ConceptDriftExplainerPanel({
     }
     return drifts[0]?.drift_key ?? null;
   }, [selectedKey, drifts]);
+
+  const selectedStored = effectiveKey ? explanations[effectiveKey] : undefined;
+
+  // The Run analysis mutation returns the moment the job is *queued*, not when
+  // the pipeline has written its cache. Follow the job to completion so the
+  // explanation refetches at the right time and pipeline failures (e.g. an
+  // un-indexed corpus) surface instead of silently doing nothing.
+  useEffect(() => {
+    if (!explainJobId) return;
+    const sub = subscribeJob(explainJobId, (env) => {
+      if (env.topic === "job.completed") {
+        setExplainJobId(null);
+        void qc.invalidateQueries({ queryKey: cdeKeys.explanations(logId) });
+        toast.success("Explanation ready");
+      } else if (env.topic === "job.failed") {
+        setExplainJobId(null);
+        const msg = (env.payload as { error?: string })?.error ?? "unknown error";
+        toast.error(`Explanation failed: ${msg}`);
+      } else if (env.topic === "job.cancelled") {
+        setExplainJobId(null);
+      }
+    });
+    return () => sub.close();
+  }, [explainJobId, logId, qc]);
 
   const chatHistory = effectiveKey
     ? // The chat history is stored separately under `chat_{drift_key}`. We
@@ -90,14 +120,19 @@ export function ConceptDriftExplainerPanel({
               size="sm"
               onClick={() =>
                 effectiveKey &&
-                runExplain.mutate({ drift_key: effectiveKey })
+                runExplain.mutate(
+                  { drift_key: effectiveKey },
+                  {
+                    onSuccess: (r) => setExplainJobId(r.job_id),
+                    onError: (e) =>
+                      toast.error(`Could not start analysis: ${e.message}`),
+                  },
+                )
               }
-              disabled={
-                !effectiveKey || !hasIndexable || runExplain.isPending
-              }
+              disabled={!effectiveKey || !hasIndexable || running}
             >
               <Play className="mr-1.5 h-3.5 w-3.5" />
-              {runExplain.isPending ? "Running…" : "Run analysis"}
+              {running ? "Running…" : "Run analysis"}
             </Button>
             {!hasIndexable && (
               <p className="text-[11px] text-muted-foreground">

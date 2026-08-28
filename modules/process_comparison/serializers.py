@@ -17,6 +17,54 @@ def _status(in_a: bool, in_b: bool) -> str:
     return "only_a" if in_a else "only_b"
 
 
+def _activity_freq(
+    dfg: dict[tuple[str, str], int], starts: dict[str, int], ends: dict[str, int]
+) -> dict[str, int]:
+    """Per-activity frequency = outgoing-edge sum, floored by its start/end
+    weight (mirrors discovery's serialize_dfg activity accounting)."""
+    acts: dict[str, int] = {}
+    for (src, tgt), freq in dfg.items():
+        acts[src] = acts.get(src, 0) + freq
+        acts.setdefault(tgt, 0)
+    for a, f in starts.items():
+        acts[a] = max(acts.get(a, 0), f)
+    for a, f in ends.items():
+        acts[a] = max(acts.get(a, 0), f)
+    return acts
+
+
+def build_activity_diff(
+    dfg_a: dict[tuple[str, str], int],
+    starts_a: dict[str, int],
+    ends_a: dict[str, int],
+    dfg_b: dict[tuple[str, str], int],
+    starts_b: dict[str, int],
+    ends_b: dict[str, int],
+) -> list[dict[str, Any]]:
+    """Per-activity diff rows (id/label/status/freq_a/freq_b/is_start/is_end).
+
+    Shared by the DFG-diff payload and the BPMN-diff payload so the BPMN overlay
+    can colour each task by the same status the graph uses.
+    """
+    freq_a = _activity_freq(dfg_a, starts_a, ends_a)
+    freq_b = _activity_freq(dfg_b, starts_b, ends_b)
+    rows: list[dict[str, Any]] = []
+    for act in sorted(set(freq_a) | set(freq_b)):
+        in_a, in_b = act in freq_a, act in freq_b
+        rows.append(
+            {
+                "id": act,
+                "label": act,
+                "status": _status(in_a, in_b),
+                "freq_a": int(freq_a.get(act, 0)),
+                "freq_b": int(freq_b.get(act, 0)),
+                "is_start": act in starts_a or act in starts_b,
+                "is_end": act in ends_a or act in ends_b,
+            }
+        )
+    return rows
+
+
 def serialize_dfg_diff(
     dfg_a: dict[tuple[str, str], int],
     starts_a: dict[str, int],
@@ -32,38 +80,7 @@ def serialize_dfg_diff(
     can label the delta.
     """
 
-    # Per-activity frequency in each log = outgoing-edge sum, floored by its
-    # start/end weight (mirrors discovery's serialize_dfg activity accounting).
-    def _activity_freq(
-        dfg: dict[tuple[str, str], int], starts: dict[str, int], ends: dict[str, int]
-    ) -> dict[str, int]:
-        acts: dict[str, int] = {}
-        for (src, tgt), freq in dfg.items():
-            acts[src] = acts.get(src, 0) + freq
-            acts.setdefault(tgt, 0)
-        for a, f in starts.items():
-            acts[a] = max(acts.get(a, 0), f)
-        for a, f in ends.items():
-            acts[a] = max(acts.get(a, 0), f)
-        return acts
-
-    freq_a = _activity_freq(dfg_a, starts_a, ends_a)
-    freq_b = _activity_freq(dfg_b, starts_b, ends_b)
-
-    activities: list[dict[str, Any]] = []
-    for act in sorted(set(freq_a) | set(freq_b)):
-        in_a, in_b = act in freq_a, act in freq_b
-        activities.append(
-            {
-                "id": act,
-                "label": act,
-                "status": _status(in_a, in_b),
-                "freq_a": int(freq_a.get(act, 0)),
-                "freq_b": int(freq_b.get(act, 0)),
-                "is_start": act in starts_a or act in starts_b,
-                "is_end": act in ends_a or act in ends_b,
-            }
-        )
+    activities = build_activity_diff(dfg_a, starts_a, ends_a, dfg_b, starts_b, ends_b)
 
     edges: list[dict[str, Any]] = []
     for src, tgt in sorted(set(dfg_a) | set(dfg_b)):
@@ -174,3 +191,65 @@ def serialize_activity_deltas(
         "log_ids": log_ids,
         "activities": rows,
     }
+
+
+def serialize_bpmn(bpmn_graph: Any) -> dict[str, Any]:
+    """Serialise a pm4py BPMN graph to its standard XML form.
+
+    Copied from the discovery module (modules can't import each other). pm4py
+    exposes ``write_bpmn`` but no bytes/stream API, so we round-trip through a
+    NamedTemporaryFile. ``auto_layout=False`` keeps the heavy graphviz layouter
+    out of the request - the emitted XML has no BPMNDI and bpmn-auto-layout fills
+    coordinates in client-side just before bpmn-js renders.
+    """
+    import tempfile
+    from pathlib import Path
+
+    import pm4py
+
+    with tempfile.NamedTemporaryFile(suffix=".bpmn", delete=False) as fh:
+        tmp = Path(fh.name)
+    try:
+        pm4py.write_bpmn(bpmn_graph, str(tmp), auto_layout=False)
+        xml = tmp.read_text(encoding="utf-8")
+    finally:
+        tmp.unlink(missing_ok=True)
+
+    return {"kind": "bpmn", "version": 1, "xml": xml}
+
+
+# (key, label, unit, lower_is_better) - drives the KPI cards order + formatting.
+_KPI_META: list[tuple[str, str, str, bool]] = [
+    ("cases", "Cases", "count", False),
+    ("events", "Events", "count", False),
+    ("activities", "Distinct activities", "count", False),
+    ("variants", "Variants", "count", False),
+    ("throughput_s", "Mean throughput", "seconds", True),
+]
+
+
+def serialize_summary_delta(kpis_a: dict[str, float], kpis_b: dict[str, float]) -> dict[str, Any]:
+    """Pairwise KPI delta (baseline ``a`` vs comparison ``b``).
+
+    ``delta = value_b - value_a``; ``pct_delta`` is ``None`` when the baseline
+    value is 0 (avoids divide-by-zero). ``lower_is_better`` lets the panel hint
+    that a *negative* throughput delta is an improvement.
+    """
+    rows: list[dict[str, Any]] = []
+    for key, label, unit, lower_is_better in _KPI_META:
+        va = kpis_a.get(key, 0)
+        vb = kpis_b.get(key, 0)
+        delta = vb - va
+        rows.append(
+            {
+                "key": key,
+                "label": label,
+                "unit": unit,
+                "value_a": va,
+                "value_b": vb,
+                "delta": delta,
+                "pct_delta": (delta / va) if va else None,
+                "lower_is_better": lower_is_better,
+            }
+        )
+    return {"kind": "summary_delta", "kpis": rows}

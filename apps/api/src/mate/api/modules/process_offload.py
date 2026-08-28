@@ -75,7 +75,7 @@ def invoke(
     return obj(*args, **(kwargs or {}))
 
 
-def offload_child_main(conn: Any, spec: dict[str, Any]) -> None:
+def offload_child_main(conn: Any, spec: dict[str, Any], death_conn: Any | None = None) -> None:
     """Entry point for one killable per-call offload process (§8.3).
 
     Runs in a *fresh* spawned/forkserver child - one process per
@@ -91,9 +91,22 @@ def offload_child_main(conn: Any, spec: dict[str, Any]) -> None:
     payload spawned. The ``(ok, value)`` result - or ``(False, exception)`` -
     is shipped back over ``conn``; if the host kills us we simply never send and
     the host detects the dead process.
+
+    ``death_conn`` is the read end of a parent-held pipe: if the API dies without
+    running its graceful teardown (SIGKILL, ``--reload`` hard restart, crash) the
+    write end closes and the parent-death guard SIGKILLs this child's whole group
+    - so an offload can never outlive the platform as an orphan burning a core.
     """
     with contextlib.suppress(OSError):
         os.setsid()  # already a group leader (or unsupported) → host falls back to pid kill
+    # Install *after* setsid so the guard's group-kill targets this child's own
+    # group, never the API's. Best-effort: a guard failure must not break offload.
+    try:
+        from mate.api.jobs.proc_guard import install_parent_death_guard
+
+        install_parent_death_guard(death_conn)
+    except Exception:
+        pass
     try:
         if spec["kind"] == "module":
             result = invoke(

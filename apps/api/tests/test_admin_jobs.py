@@ -89,6 +89,7 @@ async def test_admin_jobs_require_admin(client: AsyncClient) -> None:
     # A plain ``user`` is forbidden from the listing and every control route.
     assert (await client.get("/api/v1/admin/jobs")).status_code == 403
     assert (await client.post("/api/v1/admin/jobs/cancel-all", json={})).status_code == 403
+    assert (await client.post("/api/v1/admin/jobs/x/kill")).status_code == 403
     assert (
         await client.post("/api/v1/admin/jobs/queue/pause", json={"user_id": TEST_USER_ID})
     ).status_code == 403
@@ -150,6 +151,19 @@ async def test_admin_cancel_queued_then_conflict(admin_client: AsyncClient) -> N
         assert first.status_code == 204
         # Already terminal → 409 on a second attempt.
         again = await admin_client.post(f"/api/v1/admin/jobs/{job_id}/cancel")
+        assert again.status_code == 409
+    finally:
+        await _delete_jobs(job_id)
+
+
+@pytest.mark.asyncio
+async def test_admin_kill_queued_then_conflict(admin_client: AsyncClient) -> None:
+    job_id = await _insert_job(status="queued")
+    try:
+        first = await admin_client.post(f"/api/v1/admin/jobs/{job_id}/kill")
+        assert first.status_code == 204
+        # Already terminal → 409 on a second attempt.
+        again = await admin_client.post(f"/api/v1/admin/jobs/{job_id}/kill")
         assert again.status_code == 409
     finally:
         await _delete_jobs(job_id)

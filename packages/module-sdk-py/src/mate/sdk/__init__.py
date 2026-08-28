@@ -36,6 +36,7 @@ from mate.sdk.context import (
 from mate.sdk.decorators import job, on_event, route
 from mate.sdk.errors import Cancelled, ModuleError, ModuleManifestError
 from mate.sdk.manifest import (
+    Artifact,
     DependenciesPython,
     EventLogRequirements,
     Manifest,
@@ -43,12 +44,21 @@ from mate.sdk.manifest import (
     ModuleCategory,
     OptionalModuleDep,
     Requirements,
+    RuntimeJvm,
+    RuntimePython,
+    Source,
+    WidgetDrill,
+    WidgetEntry,
+    WidgetHelp,
+    WidgetKpi,
+    WidgetView,
 )
 from mate.sdk.module import Module
 
 __version__ = "0.2.0"
 
 __all__ = [
+    "Artifact",
     "CancellationProtocol",
     "Cancelled",
     "DependenciesPython",
@@ -69,6 +79,14 @@ __all__ = [
     "ProgressReporterProtocol",
     "Requirements",
     "ResultCacheProtocol",
+    "RuntimeJvm",
+    "RuntimePython",
+    "Source",
+    "WidgetDrill",
+    "WidgetEntry",
+    "WidgetHelp",
+    "WidgetKpi",
+    "WidgetView",
     "job",
     "on_event",
     "route",

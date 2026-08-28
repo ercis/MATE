@@ -22,6 +22,7 @@ schema consumed by the panel.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -55,6 +56,7 @@ class SliceSpec:
 
 
 # ── timestamp helpers ─────────────────────────────────────────────────────────
+
 
 def _coerce(df: pd.DataFrame) -> pd.DataFrame:
     """Return ``df`` with a datetime ``timestamp`` column (coerced if needed)."""
@@ -98,6 +100,7 @@ def _single_slice(starts: pd.Series) -> list[SliceSpec]:
 
 
 # ── slice builders ────────────────────────────────────────────────────────────
+
 
 def _build_absolute(starts: pd.Series, n: int) -> list[SliceSpec]:
     n = max(1, min(int(n), _MAX_SLICES))
@@ -172,9 +175,7 @@ def _build_calendar(starts: pd.Series, granularity: str) -> tuple[list[SliceSpec
     return slices, freq
 
 
-def _build_sliding(
-    starts: pd.Series, window_days: float, step_days: float
-) -> list[SliceSpec]:
+def _build_sliding(starts: pd.Series, window_days: float, step_days: float) -> list[SliceSpec]:
     if starts.empty:
         return []
     window = pd.Timedelta(days=max(float(window_days), 1e-9))
@@ -202,6 +203,7 @@ def _build_sliding(
 
 # ── metric-key extraction ─────────────────────────────────────────────────────
 
+
 def _numeric_metric_keys(metrics: dict[str, Any]) -> list[str]:
     """Numeric (or nullable-numeric) metric keys, excluding ``exponential_k``.
 
@@ -222,6 +224,7 @@ def _numeric_metric_keys(metrics: dict[str, Any]) -> list[str]:
 
 # ── public entry point ────────────────────────────────────────────────────────
 
+
 def compute_timeseries(
     df: pd.DataFrame,
     mode: str,
@@ -229,12 +232,16 @@ def compute_timeseries(
     *,
     exponential_k: float = 1.0,
     min_cases: int = 1,
+    progress: Callable[[float, str], None] | None = None,
 ) -> dict[str, Any]:
     """Build time slices and run the complexity math on each sub-log.
 
     Returns the ``complexity_timeseries`` result schema: ``metric_keys`` (the
     dropdown source) plus one point per slice carrying all KPIs, so the panel
     can switch the Y-axis metric without refetching.
+
+    ``progress`` (optional) receives ``(fraction, message)`` once per slice
+    so long series stay observable in the jobs UI.
     """
     mode = mode if mode in ("absolute", "calendar", "sliding") else "calendar"
     min_cases = max(1, int(min_cases))
@@ -257,6 +264,22 @@ def compute_timeseries(
         specs, freq = _build_calendar(starts, granularity)
         resolved_params = {"granularity": granularity, "freq": freq}
 
+    # Absolute/calendar slices are disjoint (a case belongs to exactly one
+    # slice), so the sub-logs come from one groupby pass instead of a
+    # per-slice `isin` scan over the whole frame. Sliding windows overlap
+    # and keep the per-window filter.
+    frames: dict[int, pd.DataFrame] | None = None
+    if mode != "sliding":
+        case_to_slice: dict[Any, int] = {}
+        for i, spec in enumerate(specs):
+            for cid in spec.case_ids:
+                case_to_slice[cid] = i
+        frames = {}
+        if case_to_slice:
+            slice_key = df["case_id"].map(case_to_slice)
+            frames = {int(key): sub for key, sub in df.groupby(slice_key, sort=False)}
+
+    empty = df.iloc[0:0]
     metric_keys: list[str] | None = None
     slices_out: list[dict[str, Any]] = []
     for i, spec in enumerate(specs):
@@ -264,7 +287,13 @@ def compute_timeseries(
         metrics: dict[str, Any] | None = None
         n_events = 0
         if n_cases >= min_cases:
-            sub_df = df[df["case_id"].isin(spec.case_ids)]
+            if progress is not None:
+                progress(i / len(specs), f"Slice {i + 1}/{len(specs)} ({spec.label})")
+            sub_df = (
+                frames.get(i, empty)
+                if frames is not None
+                else df[df["case_id"].isin(set(spec.case_ids))]
+            )
             metrics = compute_basic_metrics(sub_df, exponential_k=exponential_k) or None
             n_events = len(sub_df)
             if metrics is not None and metric_keys is None:

@@ -1,18 +1,7 @@
-import { PageContainer } from "@/components/page";
-import { Skeleton } from "@/components/ui/skeleton";
+import { VariantDetailSkeleton } from "@/components/processes/variant-detail/skeleton";
 
-// Mirrors the variant detail layout: breadcrumb + header + sequence strip +
-// duration histogram / case-list blocks.
+// Same frame as the page's isLoading branch, so the route-level skeleton and
+// the query skeleton are identical — no flash between them.
 export default function Loading() {
-  return (
-    <PageContainer className="space-y-6">
-      <Skeleton className="h-4 w-48" />
-      <Skeleton className="h-24 w-full rounded-xl" />
-      <Skeleton className="h-16 w-full rounded-xl" />
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Skeleton className="h-64 w-full rounded-xl" />
-        <Skeleton className="h-64 w-full rounded-xl" />
-      </div>
-    </PageContainer>
-  );
+  return <VariantDetailSkeleton />;
 }

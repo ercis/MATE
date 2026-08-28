@@ -12,6 +12,7 @@ arrives in phase 5.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
 import threading
 from collections.abc import Callable
@@ -56,10 +57,8 @@ class DuckDBPool:
         # for aggregations; the optional thread cap curbs core oversubscription
         # when many widget queries run at once.
         def _try(sql: str) -> None:
-            try:
+            with contextlib.suppress(duckdb.Error):
                 conn.execute(sql)
-            except duckdb.Error:
-                pass
 
         if settings.duckdb_threads > 0:
             _try(f"PRAGMA threads={int(settings.duckdb_threads)}")
@@ -102,10 +101,8 @@ class DuckDBPool:
     def close_all(self) -> None:
         with self._lock:
             for conn in self._conns:
-                try:
+                with contextlib.suppress(Exception):
                     conn.close()
-                except Exception:
-                    pass
             self._conns.clear()
 
 

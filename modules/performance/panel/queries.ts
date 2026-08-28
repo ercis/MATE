@@ -11,6 +11,17 @@ function perfUrl(path: string, logId: string): string {
   return `/api/v1/modules/performance${path}?log_id=${encodeURIComponent(logId)}`;
 }
 
+// Log-level summary (counts + calendar span) – process context shown at the top
+// of the panel. Pulled straight from the platform event-log endpoint so the
+// numbers match the processes list exactly; the module never recomputes them.
+export interface LogSummary {
+  cases_count: number | null;
+  events_count: number | null;
+  variants_count: number | null;
+  date_min: string | null;
+  date_max: string | null;
+}
+
 export interface PerformanceKpis {
   kind: "kpis";
   summary: {
@@ -60,6 +71,15 @@ export interface CycleTimeDistribution {
     min_cycle_time_s: number;
     max_cycle_time_s: number;
   };
+}
+
+export function useLogSummary(logId: string) {
+  return useQuery<LogSummary>({
+    queryKey: ["event-logs", "summary", logId],
+    queryFn: () => api<LogSummary>(`/api/v1/event-logs/${encodeURIComponent(logId)}`),
+    enabled: Boolean(logId),
+    staleTime: STALE_TIME,
+  });
 }
 
 export function usePerformanceKpis(logId: string) {

@@ -40,3 +40,34 @@ export function jobProgress(job: LiveJob): JobProgress {
     eta,
   };
 }
+
+/**
+ * Human-readable label for a raw backend `stage` key. The ingest pipeline emits
+ * terse keys (`parsing`/`normalizing`/`writing`/`done`); module install and
+ * migration jobs emit a few more. This maps the known ones to friendly phrases
+ * (e.g. import reads as "Reading data → Processing → Saving") and title-cases
+ * anything unknown so a new stage still renders sensibly instead of shouting the
+ * raw key in uppercase.
+ */
+const STAGE_LABELS: Record<string, string> = {
+  // Event-log import (apps/api/.../ingest/dispatch.py)
+  parsing: "Reading data",
+  normalizing: "Processing",
+  writing: "Saving",
+  done: "Finishing up",
+  // Module install / model / migration jobs
+  extracting: "Extracting",
+  installing: "Installing",
+  migrating: "Migrating",
+  validating: "Validating",
+  ready: "Ready",
+};
+
+export function stageLabel(stage: string | null | undefined): string {
+  if (!stage) return "";
+  const known = STAGE_LABELS[stage.toLowerCase()];
+  if (known) return known;
+  // Fallback: turn "some_stage" / "some-stage" into "Some stage".
+  const words = stage.replace(/[_-]+/g, " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}

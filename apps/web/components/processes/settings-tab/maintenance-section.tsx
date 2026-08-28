@@ -1,11 +1,11 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { RefreshCcw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { toastError } from "@/lib/toast";
+import { useProgressRouter } from "@/lib/use-progress-router";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -24,7 +24,7 @@ import { useDeleteEventLog, useReimportEventLog } from "@/lib/queries";
 import { SectionShell } from "./general-section";
 
 export function MaintenanceSection({ log }: { log: EventLogDetail }) {
-  const router = useRouter();
+  const router = useProgressRouter();
   const reimport = useReimportEventLog();
   const del = useDeleteEventLog();
   const [reimportOpen, setReimportOpen] = useState(false);

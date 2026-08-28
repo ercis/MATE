@@ -88,6 +88,38 @@ async def test_module_route_applies_event_filter_header(
 
 
 @pytest.mark.asyncio
+async def test_open_event_log_filters_override_committed_filter(
+    client_with_sample_mod: AsyncClient,
+) -> None:
+    """`ctx.open_event_log(id, filters)` scopes that *view* only.
+
+    This is what lets a comparison module read two differently filtered views of
+    the SAME log in one request: `None` inherits the log's committed Events-tab
+    filter, an explicit list replaces it, and `[]` reads the raw log.
+    """
+    log_id = await _seed_sample_log(client_with_sample_mod)
+    url = f"/api/v1/modules/sample_mod/open-other?log_id={log_id}&other_id={log_id}"
+
+    # No filters → the log's committed filter (none yet) → all 9 events.
+    assert (await client_with_sample_mod.get(url)).json() == {"events": 9}
+    # Explicit filter → only the 2 'ship' events, nothing persisted.
+    assert (await client_with_sample_mod.get(f"{url}&only_activity=ship")).json() == {"events": 2}
+
+    # Commit a filter on the log: it now becomes the default for the view.
+    committed = await client_with_sample_mod.put(
+        f"/api/v1/event-logs/{log_id}/active-filter",
+        json={"filter": [{"field": "activity", "op": "equals", "value": "check stock"}]},
+    )
+    assert committed.status_code == 200, committed.text
+
+    assert (await client_with_sample_mod.get(url)).json() == {"events": 3}
+    # An explicit list REPLACES the committed one (not intersected with it)…
+    assert (await client_with_sample_mod.get(f"{url}&only_activity=ship")).json() == {"events": 2}
+    # …and `[]` drops it entirely.
+    assert (await client_with_sample_mod.get(f"{url}&raw=true")).json() == {"events": 9}
+
+
+@pytest.mark.asyncio
 async def test_open_event_log_enforces_ownership(
     client_with_sample_mod: AsyncClient,
 ) -> None:
@@ -197,17 +229,19 @@ async def test_module_manifest_endpoint(client_with_sample_mod: AsyncClient) -> 
 
 @pytest.mark.asyncio
 async def test_module_config_get_put(client_with_sample_mod: AsyncClient) -> None:
+    # sample_mod exposes no cards, so controlled_cards is always empty.
+    empty = {"controlled_by_admin": False, "controlled_cards": {}}
     initial = await client_with_sample_mod.get("/api/v1/modules/sample_mod/config")
     assert initial.status_code == 200
-    assert initial.json() == {"config": {}, "enabled": True, "controlled_by_admin": False}
+    assert initial.json() == {"config": {}, "enabled": True, **empty}
 
     payload = {"config": {"threshold": 0.5}, "enabled": True}
     put = await client_with_sample_mod.put("/api/v1/modules/sample_mod/config", json=payload)
     assert put.status_code == 200
-    assert put.json() == {**payload, "controlled_by_admin": False}
+    assert put.json() == {**payload, **empty}
 
     again = await client_with_sample_mod.get("/api/v1/modules/sample_mod/config")
-    assert again.json() == {**payload, "controlled_by_admin": False}
+    assert again.json() == {**payload, **empty}
 
 
 @pytest.mark.asyncio
@@ -240,6 +274,49 @@ async def test_module_assets_served_and_traversal_rejected(
     # the relative_to() check fails.
     escape = await client_with_sample_mod.get("/api/v1/modules/sample_mod/assets/..%2Fsecret.txt")
     assert escape.status_code in (400, 404)
+
+
+@pytest.mark.asyncio
+async def test_module_asset_etag_revalidation(client_with_sample_mod: AsyncClient) -> None:
+    """Bundles revalidate via ETag: 200 + ETag first, 304 on If-None-Match,
+    fresh 200 once the file changes (new mtime/size => new tag)."""
+    from mate.api.config import get_settings
+
+    settings = get_settings()
+    dist_dir = settings.modules_dir / "sample_mod" / ".dist"
+    dist_dir.mkdir(parents=True, exist_ok=True)
+    panel = dist_dir / "panel.js"
+    panel.write_text("module.exports = { Panel: () => null };\n")
+
+    first = await client_with_sample_mod.get("/api/v1/modules/sample_mod/assets/panel.js")
+    assert first.status_code == 200
+    etag = first.headers.get("etag")
+    assert etag
+    assert first.headers.get("cache-control") == "private, no-cache"
+
+    revalidated = await client_with_sample_mod.get(
+        "/api/v1/modules/sample_mod/assets/panel.js",
+        headers={"If-None-Match": etag},
+    )
+    assert revalidated.status_code == 304
+    assert revalidated.content == b""
+    assert revalidated.headers.get("etag") == etag
+
+    # Weak-tag + list forms match too (browsers may send either).
+    weak = await client_with_sample_mod.get(
+        "/api/v1/modules/sample_mod/assets/panel.js",
+        headers={"If-None-Match": f'W/{etag}, "other"'},
+    )
+    assert weak.status_code == 304
+
+    # Rebuild -> different size (and mtime) -> stale tag gets a fresh 200.
+    panel.write_text("module.exports = { Panel: () => null }; // rebuilt\n")
+    changed = await client_with_sample_mod.get(
+        "/api/v1/modules/sample_mod/assets/panel.js",
+        headers={"If-None-Match": etag},
+    )
+    assert changed.status_code == 200
+    assert changed.headers.get("etag") != etag
 
 
 @pytest.mark.asyncio
@@ -302,29 +379,6 @@ async def test_module_install_upload_rejects_bad_suffix(
         files={"file": ("not-archive.txt", b"hello", "text/plain")},
     )
     assert resp.status_code == 400
-
-
-@pytest.mark.asyncio
-async def test_module_install_registry_npm_rejected(
-    client_with_sample_mod: AsyncClient,
-) -> None:
-    """npm source has no Python entry point to bind to - the job must surface
-    a clear error rather than silently no-op."""
-    resp = await client_with_sample_mod.post(
-        "/api/v1/modules/install/registry",
-        json={"source": "npm", "id": "@scope/pkg"},
-    )
-    assert resp.status_code == 202
-    job_id = resp.json()["job_id"]
-    for _ in range(30):
-        d = await client_with_sample_mod.get(f"/api/v1/jobs/{job_id}")
-        if d.status_code == 200 and d.json()["status"] in {"completed", "failed"}:
-            break
-        await asyncio.sleep(0.1)
-    body = d.json()
-    assert body["status"] == "failed"
-    msg = (body.get("message") or "") + (body.get("error") or "")
-    assert "npm" in msg.lower()
 
 
 @pytest.mark.asyncio
@@ -582,3 +636,74 @@ def test_discover_skips_duplicate_id_across_roots(tmp_path: Path) -> None:
     discovery_mods = [d for d in found if d.id == "discovery"]
     assert len(discovery_mods) == 1
     assert discovery_mods[0].folder == kept
+
+
+@pytest.mark.asyncio
+async def test_reload_rebinds_route_to_the_new_instance(
+    client_with_sample_mod: AsyncClient,
+) -> None:
+    """A reloaded module must serve its routes from the *new* instance.
+
+    FastAPI cannot unbind a route, so `load_one` mounts a second one and
+    Starlette keeps matching the first - which used to close over the instance
+    it was bound against. For a subprocess module that instance is a stub over
+    a bridge whose worker `unload_one` already stopped, so every call after a
+    hot reload died writing to the dead socket (surfacing as a raw
+    `unable to perform operation on <UnixTransport closed=True ...>`).
+    """
+    from mate.api.modules.loader import get_module_loader
+    from mate.sdk.manifest import Manifest
+
+    loader = get_module_loader()
+    loaded = loader.loaded["sample_mod"]
+    folder = loaded.discovered.folder
+    first_instance = loaded.instance
+
+    assert (await client_with_sample_mod.get("/api/v1/modules/sample_mod/ping")).status_code == 200
+
+    await loader.load_one(folder, Manifest.load_yaml(folder / "manifest.yaml"))
+    second_instance = loader.loaded["sample_mod"].instance
+    assert second_instance is not first_instance
+
+    # Mark the live instance; the mounted (pre-reload) route must reach it.
+    async def _marked_ping(ctx: object, **_kw: object) -> dict[str, str]:
+        return {"module_id": ctx.module_id, "status": "reloaded"}  # type: ignore[attr-defined]
+
+    second_instance.ping = _marked_ping
+
+    resp = await client_with_sample_mod.get("/api/v1/modules/sample_mod/ping")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "reloaded"
+
+
+@pytest.mark.asyncio
+async def test_unloaded_module_route_404s_instead_of_calling_a_dead_instance(
+    client_with_sample_mod: AsyncClient,
+) -> None:
+    """`unload_one` can't remove the route, so the handler must refuse."""
+    from mate.api.modules.loader import get_module_loader
+
+    loader = get_module_loader()
+    await loader.unload_one("sample_mod")
+
+    resp = await client_with_sample_mod.get("/api/v1/modules/sample_mod/ping")
+    assert resp.status_code == 404
+
+
+def test_job_runtime_register_replace() -> None:
+    """Duplicate registration stays an error; `replace=True` (module reload)
+    swaps the handler instead of leaving the previous closure serving the type."""
+    from mate.api.jobs.runtime import JobRuntime
+
+    runtime = JobRuntime.__new__(JobRuntime)
+    runtime._handlers = {}  # type: ignore[attr-defined]
+
+    async def first(_handle: object) -> None: ...
+    async def second(_handle: object) -> None: ...
+
+    runtime.register("module.x.run", first)  # type: ignore[arg-type]
+    with pytest.raises(RuntimeError, match="already registered"):
+        runtime.register("module.x.run", second)  # type: ignore[arg-type]
+
+    runtime.register("module.x.run", second, replace=True)  # type: ignore[arg-type]
+    assert runtime._handlers["module.x.run"] is second  # type: ignore[attr-defined]

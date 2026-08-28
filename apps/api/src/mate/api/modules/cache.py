@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from mate.api.config import get_settings
+from mate.api.storage import eviction
 from mate.api.storage import sync as storage_sync
 
 
@@ -48,27 +49,34 @@ class ResultCache:
         return await asyncio.to_thread(self._get_sync, key)
 
     def _get_sync(self, key: str) -> Any:
-        # In S3 mode, pull this module's cached outputs down if the local cache
-        # is cold (once per dir per process). No-op in local mode / warm cache.
-        storage_sync.hydrate_dir_sync(self.dir)
-        for ext in ("json", "parquet", "bin"):
-            path = self._candidate(f"{key}.{ext}")
-            if not path.exists():
-                continue
-            if ext == "json":
-                return json.loads(path.read_text())
-            if ext == "parquet":
-                import pandas as pd
+        # Lease the dir so the S3 cache reaper can't evict it mid-read; in S3
+        # mode pull this module's outputs down if the cache is cold (once per dir
+        # per process). No-op in local mode / warm cache.
+        with eviction.LeaseDir(self.dir):
+            storage_sync.hydrate_dir_sync(self.dir)
+            for ext in ("json", "parquet", "bin"):
+                path = self._candidate(f"{key}.{ext}")
+                if not path.exists():
+                    continue
+                if ext == "json":
+                    return json.loads(path.read_text())
+                if ext == "parquet":
+                    import pandas as pd
 
-                return pd.read_parquet(path)
-            if ext == "bin":
-                return path.read_bytes()
+                    return pd.read_parquet(path)
+                if ext == "bin":
+                    return path.read_bytes()
         return None
 
     async def set(self, key: str, value: Any) -> None:
-        await asyncio.to_thread(self._set_sync, key, value)
-        # Persist the (now-updated) outputs dir to the S3 primary store.
-        await asyncio.to_thread(storage_sync.persist_dir_sync, self.dir)
+        await asyncio.to_thread(self._set_and_persist, key, value)
+
+    def _set_and_persist(self, key: str, value: Any) -> None:
+        # One lease spans write + upload so the reaper can't reclaim the dir
+        # between the local write and its S3 persist.
+        with eviction.LeaseDir(self.dir):
+            self._set_sync(key, value)
+            storage_sync.persist_dir_sync(self.dir)
 
     def _set_sync(self, key: str, value: Any) -> None:
         # Pick the encoding by type.

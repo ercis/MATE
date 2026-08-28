@@ -20,11 +20,16 @@ export default function CycleTimeComparison({
   logId: string;
   config?: Record<string, unknown>;
 }) {
-  const { data, isLoading } = useAgentSimResults(logId);
+  const { data, isLoading, isFetching } = useAgentSimResults(logId);
   const bins = data?.cycle_time?.bins ?? [];
 
   return (
-    <CardShell loading={isLoading} empty={bins.length === 0}>
+    <CardShell
+      logId={logId}
+      loading={isLoading}
+      empty={bins.length === 0}
+      refreshing={isFetching}
+    >
       <div className="flex h-full min-h-0 flex-col gap-1">
         <LegendDots />
         <div className="min-h-0 flex-1">

@@ -79,6 +79,7 @@ function entriesForModule(folder, manifest) {
   //     widgets:
   //       - id: throughput-chart
   //         entry: ./widgets/Throughput.tsx
+  //         settings_entry: ./widgets/ThroughputSettings.tsx
   const out = [];
   const fe = manifest.frontend ?? {};
   if (typeof fe.panel === "string") {
@@ -86,8 +87,20 @@ function entriesForModule(folder, manifest) {
   }
   if (Array.isArray(fe.widgets)) {
     for (const w of fe.widgets) {
-      if (w && typeof w.entry === "string" && typeof w.id === "string") {
+      if (!w || typeof w.id !== "string") continue;
+      if (typeof w.entry === "string") {
         out.push({ name: `widget-${w.id}`, path: resolve(folder, w.entry) });
+      }
+      // A widget whose controls can't be expressed as JSON Schema ships its own
+      // settings component. Bundled separately so the card's settings panel is
+      // only fetched when the user actually opens it — the naming is the
+      // contract (`assets/widget-<id>-settings.js`), which is why the card
+      // catalog only needs to expose a boolean.
+      if (typeof w.settings_entry === "string") {
+        out.push({
+          name: `widget-${w.id}-settings`,
+          path: resolve(folder, w.settings_entry),
+        });
       }
     }
   }
@@ -126,7 +139,10 @@ function commonOptions(entry, outdir) {
     target: "es2022",
     jsx: "automatic",
     jsxImportSource: "react",
-    sourcemap: "inline",
+    // Inline maps only while watching (dev DX). One-shot builds ship a linked
+    // panel.js.map instead – inline maps double-to-triple panel.js (discovery:
+    // 2.3MB inline vs ~0.7MB linked) and every user downloads them.
+    sourcemap: WATCH ? "inline" : "linked",
     legalComments: "none",
     logLevel: WATCH ? "info" : "warning",
     // Runtime externals stay as require() calls; the frontend loader resolves
@@ -143,6 +159,46 @@ function commonOptions(entry, outdir) {
   };
 }
 
+/**
+ * Canvas contract check (warn only – see `modules/README.md` § Canvases).
+ *
+ * Every graph/diagram view goes through `CanvasShell` (or `CanvasControlCluster`
+ * for a non-React-Flow viewer) so the zoom / fit / fullscreen / settings / reset
+ * cluster is identical everywhere. A panel that mounts `<ReactFlow>` itself, or
+ * hand-rolls the control pill, silently drifts – flag it at build time instead
+ * of finding out in review.
+ */
+function checkCanvasContract(moduleId, folder) {
+  const files = [];
+  const walk = (dir) => {
+    for (const name of readdirSync(dir)) {
+      if (name === "node_modules" || name.startsWith(".")) continue;
+      const p = join(dir, name);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (/\.(tsx|jsx)$/.test(name)) files.push(p);
+    }
+  };
+  for (const sub of ["panel", "widgets", "frontend"]) {
+    const dir = join(folder, sub);
+    if (existsSync(dir)) walk(dir);
+  }
+  for (const file of files) {
+    const src = readFileSync(file, "utf8");
+    const where = relative(REPO_ROOT, file);
+    const warn = (msg) =>
+      console.warn(`[bundle-modules] ${moduleId}: ${where}: ${msg} (modules/README.md § Canvases)`);
+    if (/<ReactFlow[\s>]/.test(src)) {
+      warn("mounts <ReactFlow> directly – render through CanvasShell instead");
+    }
+    // Own zoom/fit buttons are the tell-tale of a re-implemented control pill.
+    const rollsOwnZoom = /Zoom in/.test(src) && /Zoom out/.test(src);
+    const usesShared = /canvases\/shared\/canvas-(shell|toolbar)/.test(src);
+    if (rollsOwnZoom && !usesShared) {
+      warn("hand-rolls zoom/fit buttons – use CanvasControlCluster");
+    }
+  }
+}
+
 async function bundleModule(folder) {
   const manifest = readManifest(folder);
   const moduleId = manifest.id;
@@ -156,6 +212,7 @@ async function bundleModule(folder) {
   }
   const outdir = join(folder, ".dist");
   const tasks = [];
+  checkCanvasContract(moduleId, folder);
   for (const entry of entries) {
     const opts = commonOptions(entry, outdir);
     if (WATCH) {

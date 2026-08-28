@@ -1,13 +1,20 @@
 id: process_comparison
 name: Process Comparison
-version: 0.1.0
+version: 1.0.0
 category: comparison
 description: >-
-  Compares two or more event logs side by side: an overlaid
+  Compares two filtered views of event logs side by side: an overlaid
   directly-follows-graph diff, variant differences, similarity scores (EMD and
-  footprints), and per-activity frequency changes.
-keywords: ["compare", "comparison", "diff", "difference", "versus", "overlay", "two logs", "process comparison"]
-author: FlowFactory
+  footprints), and per-activity frequency changes. Each side carries its own
+  filter, so two cohorts of the SAME log are a valid comparison.
+about: >-
+  Put two event-log views side by side and see exactly what differs: an overlaid
+  process-map diff, variant differences, per-activity frequency changes, and
+  similarity scores (EMD and footprints). Each side is a log plus its own
+  filter, so you can compare two logs - or two cohorts of one log (region A vs
+  region B, Q1 vs Q2) - and pinpoint where behaviour diverges instead of
+  guessing from separate diagrams.
+keywords: ["compare", "comparison", "diff", "difference", "versus", "overlay", "two logs", "cohort", "a/b", "process comparison"]
 license: MIT
 # Runs entirely locally (pm4py / duckdb) – safe against confidential logs.
 isConfidentialSafe: true
@@ -39,6 +46,11 @@ dependencies:
 
 frontend:
   panel: ./panel/index.tsx
+  # The shell's single log-scoped filter bar would be meaningless here: the panel
+  # owns one filter PER COMPARED SIDE and sends them with the request, and every
+  # read goes through open_event_log (which the shell's ambient header doesn't
+  # reach). Two filters, in the panel, next to the side they narrow.
+  log_filter: false
 
 permissions:
   - read:event_log

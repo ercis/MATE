@@ -167,7 +167,7 @@ def _find_column(
 
 def _heuristic_for(role: str, columns: list[str], claimed: set[str], sample: Any) -> str | None:
     """Last-resort, data-driven guess for a required role."""
-    import pandas as pd
+    from mate.api.ingest.parquet_coerce import to_datetime_robust
 
     avail = [c for c in columns if c not in claimed and c in getattr(sample, "columns", [])]
     if not avail:
@@ -180,7 +180,7 @@ def _heuristic_for(role: str, columns: list[str], claimed: set[str], sample: Any
             series = sample[c].dropna()
             if series.empty:
                 continue
-            parsed = pd.to_datetime(series, errors="coerce", utc=True)
+            parsed = to_datetime_robust(series, utc=True)
             ratio = float(parsed.notna().mean())
             if ratio >= 0.7 and (best is None or ratio > best[0]):
                 best = (ratio, c)

@@ -1,14 +1,32 @@
 id: concept_drift_explainer
 name: Concept Drift Explainer
-version: 0.1.0
+version: 1.0.0
 category: advanced
 description: >-
   Explains why your process changed. It takes the drift points found by CV4CDD,
   searches your uploaded company documents for context, and returns ranked,
   citation-backed causes. Sends data to an external LLM, so it is not safe for
   confidential logs.
+about: >-
+  Go from "the process changed" to "here is why": for each drift CV4CDD detects,
+  this module searches your uploaded company documents (policies, announcements,
+  slide decks) and returns ranked, citation-backed candidate causes. Use it to
+  connect drift points to real-world events such as system rollouts or policy
+  changes, and ask follow-up questions in the built-in chat. It sends excerpts
+  to an external LLM, so avoid confidential logs.
 keywords: ["explain drift", "drift explanation", "why drift", "drift reason", "root cause drift", "drift cause"]
-author: J. Schaffner
+source:
+  # The master's thesis this module ports. No DOI.
+  - title: >-
+      Explaining concept drifts in business processes: An LLM-based approach to
+      context-aware sense-making in process mining
+    fullCitation: >-
+      J. Schaffner, "Explaining concept drifts in business processes: An
+      LLM-based approach to context-aware sense-making in process mining,"
+      master's thesis, University of Münster, 2025
+artifacts:
+  - name: Concept Drift Explainer
+    url: https://github.com/janschaffner/concept_drift_explainer
 license: MIT
 default_enabled: true
 # Sends event-log excerpts and uploaded documents to an external LLM – not
@@ -56,15 +74,16 @@ dependencies:
 
 frontend:
   panel: ./panel/index.tsx
+  log_filter: false
   widgets:
     - id: drift-overview
       entry: ./widgets/DriftOverview.tsx
       title: Concept drifts
       description: Detected drifts with confidence and affected window range.
       icon: Waves
-      default_w: 5
+      default_w: 3
       default_h: 8
-      min_w: 5
+      min_w: 3
       min_h: 6
       config_schema:
         properties:
@@ -78,7 +97,12 @@ frontend:
             default: 0
             ui:
               widget: slider
-
+      min_px_w: 300
+      min_px_h: 220
+      help:
+        what: "What actually changed at each detected drift point."
+        read: "Read this next to the detections: a detection says when, this says what — which activities or paths appeared, vanished, or changed frequency."
+        computed: "Compares process behaviour before and after each detected change point."
 permissions:
   - read:event_log
   - write:module_results

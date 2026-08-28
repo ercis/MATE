@@ -5,7 +5,6 @@ from __future__ import annotations
 import math
 from typing import Any
 
-
 KPI_SQL = """
 WITH case_spans AS (
     SELECT
@@ -103,8 +102,8 @@ def quantile_from_sorted(sorted_values: list[float], q: float) -> float:
     if not sorted_values:
         return 0.0
     idx = (len(sorted_values) - 1) * q
-    lo = int(math.floor(idx))
-    hi = int(math.ceil(idx))
+    lo = math.floor(idx)
+    hi = math.ceil(idx)
     if lo == hi:
         return float(sorted_values[lo])
     frac = idx - lo
@@ -151,5 +150,9 @@ def detect_bottlenecks(
     q3 = quantile_from_sorted(sojourns, 0.75)
     iqr = q3 - q1
     threshold = median + threshold_factor * iqr if iqr > 0 else median
-    flagged = [s for s in activity_stats if (s.get("avg_sojourn_s") or 0.0) >= threshold and (s.get("avg_sojourn_s") or 0.0) > 0]
+    flagged = [
+        s
+        for s in activity_stats
+        if (s.get("avg_sojourn_s") or 0.0) >= threshold and (s.get("avg_sojourn_s") or 0.0) > 0
+    ]
     return sorted(flagged, key=lambda s: s.get("avg_sojourn_s") or 0.0, reverse=True)

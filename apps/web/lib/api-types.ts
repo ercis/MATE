@@ -40,6 +40,43 @@ export interface EventLogSummary {
   mapping_needs_review?: boolean;
 }
 
+// ── Import wizard: staged upload + column probe (POST /event-logs/stage) ─────
+
+/** How a canonical role was matched to a source column – the wizard's
+ * confidence chip. `user` = the user picked it, `exact` = header matched a
+ * canonical name/alias outright, `fuzzy` = substring match, `fallback` = guessed
+ * from the data itself. */
+export type ColumnRoleQuality = "user" | "exact" | "fuzzy" | "fallback";
+
+export interface ProbeColumn {
+  name: string;
+  /** Fraction of sampled rows carrying a non-empty value (0–1). */
+  coverage: number;
+  samples: string[];
+}
+
+/** Result of staging an upload: the bytes are on the server (referenced by
+ * `staging_token`), described well enough to confirm the mapping before the
+ * import job is queued. */
+export interface LogProbeResponse {
+  staging_token: string;
+  /** The sniffed format – a `.json` that turned out to be OCEL reads "ocel". */
+  source_format: string;
+  log_model: LogModel;
+  /** False for object-centric logs, whose schema the OCEL parser owns. */
+  needs_mapping: boolean;
+  columns: ProbeColumn[];
+  /** role → source column, from the same resolver the import job runs. */
+  roles: Record<string, string>;
+  quality: Record<string, ColumnRoleQuality>;
+  events_sampled: number;
+  size_bytes: number;
+  filename: string | null;
+  delimiter: string | null;
+  event_element: string | null;
+  event_path: string | null;
+}
+
 // ── Object-centric (OCEL) data shapes (GET /event-logs/{id}/ocel/*) ──────────
 
 export interface OcelObjectTypeEntry {
@@ -154,6 +191,19 @@ export interface JobDetail {
   finished_at: string | null;
 }
 
+/** One cited work (manifest `source[]`). `fullCitation` carries the authors. */
+export interface ManifestSource {
+  title: string;
+  fullCitation: string;
+  url: string | null;
+}
+
+/** One linked artifact (manifest `artifacts[]`) — repo, dataset, demo, model. */
+export interface ManifestArtifact {
+  name: string;
+  url: string;
+}
+
 export interface ModuleSummary {
   id: string;
   name: string;
@@ -167,11 +217,20 @@ export interface ModuleSummary {
     | "other"
     | string;
   description: string | null;
-  author: string | null;
+  /** Longer "with this module you can …" text for the About info box. */
+  about: string | null;
+  /** Cited works (max 20) — title + full citation string + optional DOI link.
+   *  There are no author fields: `fullCitation` carries the author names. */
+  source: ManifestSource[];
+  /** Optional named links (max 20) — code repo, dataset, demo, released model. */
+  artifacts: ManifestArtifact[];
   license: string | null;
   provides: string[];
   consumes: string[];
   has_frontend: boolean;
+  /** Whether the module page renders the log-scoped filter bar above the panel
+   *  (manifest `frontend.log_filter`); false for panel-less modules. */
+  supports_log_filter: boolean;
   enabled: boolean;
   is_confidential_safe: boolean;
   availability: { status: "available" | "unavailable" | "degraded"; reasons: string[] } | null;
@@ -370,6 +429,35 @@ export interface ActivitiesPage {
   total: number;
 }
 
+export interface ActivityDetail {
+  activity: string;
+  event_count: number;
+  event_pct: number;
+  case_count: number;
+  case_pct: number;
+  avg_occurrences_per_case: number | null;
+  max_occurrences_per_case: number | null;
+  start_case_count: number;
+  start_case_pct: number;
+  end_case_count: number;
+  end_case_pct: number;
+  first_seen: string | null;
+  last_seen: string | null;
+  variant_count: number;
+  top_variants: VariantRow[];
+}
+
+export interface ActivityCase extends VariantCase {
+  occurrences: number;
+}
+
+export interface ActivityCasesPage {
+  rows: ActivityCase[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
 export interface EventEditEntry {
   id: number;
   log_id: string;
@@ -469,8 +557,9 @@ export type EventSource = "client" | "server";
 /** XES trace (case) notion for the event-log export. */
 export type ExportCaseNotion = "session" | "user";
 
-/** Output format for the behaviour export. */
-export type ExportFormat = "xes" | "ndjson" | "csv";
+/** Output format for the behaviour export. The ``ocel-*`` variants download
+ * the object-centric UI log as OCEL 2.0 (GET /admin/export/events-ocel2). */
+export type ExportFormat = "xes" | "ndjson" | "csv" | "ocel-json" | "ocel-sqlite" | "ocel-xml";
 
 /** Optional filters shared by every /admin/export/* route. Empty/undefined
  * fields add no predicate (the export then spans everything). Mirrors the
@@ -543,10 +632,11 @@ export interface AiConfigOut {
 
 // ── Admin control framework – /admin/controls ──────────────────────────────
 
-export type ControlScope = "setting" | "module";
+export type ControlScope = "setting" | "card";
 export type ControlMode = "user" | "admin";
 
-/** GET /admin/controls/items – one controllable setting or module. */
+/** GET /admin/controls/items – one controllable server setting, or one settings
+ *  card of a module (config / ai / model, keyed "<module_id>:<card_id>"). */
 export interface ControlItem {
   scope: ControlScope;
   key: string;
@@ -555,12 +645,23 @@ export interface ControlItem {
   control_mode: ControlMode | string;
   /** Whether the admin value has been set (never the secret itself). */
   admin_value_set: boolean;
-  /** Echoed admin value for non-secret items (modules, analytics, concurrency). */
+  /** Echoed admin value for non-secret items (cards, analytics, concurrency). */
   admin_value: unknown | null;
   /** True when any secret (ai.config key) is stored in the admin value. */
   secret_set: boolean;
-  /** JSON-schema for module items so the editor can render inputs. */
+  /** Config card's JSON-schema so the editor can render inputs. */
   config_schema: Record<string, unknown> | null;
+  // ── card scope only ──
+  /** The module this card belongs to. */
+  module_id?: string | null;
+  /** Which card: "config" | "ai" | "model". */
+  card_id?: string | null;
+  /** The card's human title. */
+  title?: string | null;
+  /** model_store manifest (model card) so the editor knows accept/config_key. */
+  model_store?: { title?: string; description?: string | null; accept?: string; config_key?: string } | null;
+  /** ai_models manifest (ai card) so the editor renders the right selectors. */
+  ai_models?: Record<string, unknown> | null;
 }
 
 export interface ControlItems {
@@ -683,6 +784,40 @@ export interface UsageInsights {
   ai: AiUsage;
 }
 
+// --- Admin → Modules (cross-user ownership dashboard + controls) -----------
+// Mirrors apps/api/.../routes/admin_modules.py.
+
+export interface AdminModuleOwner {
+  user_id: string;
+  email: string | null;
+  username: string | null;
+  /** "default" | "upload" | "admin" – best-effort provenance. */
+  source: string | null;
+  installed_at: string;
+}
+
+/** GET /admin/modules – one row per module known to the platform. */
+export interface AdminModuleRow {
+  id: string;
+  name: string;
+  version: string;
+  category: string;
+  has_frontend: boolean;
+  /** Ships in the repo modules/ folder; always default, cannot be un-defaulted. */
+  is_bundled: boolean;
+  /** In the effective default set (bundled or admin-declared) – every user gets it. */
+  is_default: boolean;
+  default_locked: boolean;
+  /** Withheld from new seeding: existing owners keep it, but users who don't have
+   * it yet are no longer auto-seeded it. The only way to stop a bundled default
+   * reaching future users. */
+  withheld_from_new_users: boolean;
+  owner_count: number;
+  /** Earliest source="upload" owner – best-effort "who uploaded this". */
+  uploaded_by: AdminModuleOwner | null;
+  owners: AdminModuleOwner[];
+}
+
 // --- GET /system/resources (Admin → System, live CPU/RAM monitor) ----------
 
 export interface PerCoreStat {
@@ -746,4 +881,87 @@ export interface SystemResources {
   running_jobs: RunningJobInfo[];
   sample_interval_seconds: number;
   history_window_seconds: number;
+}
+
+/** GET /api/v1/api-tokens item – a per-user personal access token (no secret). */
+export interface ApiTokenInfo {
+  id: string;
+  name: string;
+  token_prefix: string;
+  scopes: string[];
+  created_at: string;
+  last_used_at: string | null;
+  expires_at: string | null;
+  revoked: boolean;
+}
+
+/** POST /api/v1/api-tokens – adds the cleartext `token`, shown exactly once. */
+export interface CreateTokenResponse extends ApiTokenInfo {
+  token: string;
+}
+
+export interface McpScopeInfo {
+  id: string;
+  description: string;
+}
+
+export interface McpOAuthInfo {
+  authorization_server: string;
+  client_id: string | null;
+  metadata_url: string;
+}
+
+/** GET /api/v1/api-tokens/mcp-info – MCP availability, endpoint, OAuth + scopes. */
+export interface McpInfo {
+  enabled: boolean;
+  url: string;
+  require_consent: boolean;
+  consented: boolean;
+  mint_allowed: boolean;
+  /** Live write lock – write tools are refused (or not even registered when boot-forced). */
+  read_only: boolean;
+  /** Toolsets registered at boot (env MCP_TOOLSETS). */
+  toolsets: string[];
+  scopes_supported: McpScopeInfo[];
+  oauth: McpOAuthInfo;
+}
+
+/** GET/PUT /api/v1/api-tokens/consent – per-user external-egress consent. */
+export interface McpConsentState {
+  required: boolean;
+  consented: boolean;
+}
+
+/** GET/PUT /api/v1/system/mcp – admin live config. */
+export interface McpAdminConfig {
+  /** env MCP_ENABLED (mount happens at boot) */
+  boot_enabled: boolean;
+  /** live effective availability */
+  enabled: boolean;
+  mint_policy: string;
+  /** env MCP_READ_ONLY (write tools not even registered) */
+  boot_read_only: boolean;
+  /** live effective write lock */
+  read_only: boolean;
+  /** registered at boot (env MCP_TOOLSETS) */
+  toolsets: string[];
+}
+
+/** PUT /api/v1/system/mcp body – all fields optional, only the given ones change. */
+export interface McpAdminUpdate {
+  enabled?: boolean;
+  mint_policy?: string;
+  read_only?: boolean;
+}
+
+/** GET /api/v1/admin/api-tokens – org-wide token (admin). */
+export interface AdminApiTokenInfo {
+  id: string;
+  user_id: string;
+  user_email: string | null;
+  name: string;
+  token_prefix: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked: boolean;
 }

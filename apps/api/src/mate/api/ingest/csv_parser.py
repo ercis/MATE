@@ -13,6 +13,7 @@ from typing import Any
 
 import pandas as pd
 
+from mate.api.ingest.parquet_coerce import to_datetime_robust
 from mate.api.schemas.event_logs import CsvColumnMapping
 
 AUTODETECT_CANDIDATES: dict[str, list[str]] = {
@@ -122,18 +123,12 @@ def parse_csv(
 
     df = df.rename(columns=rename)
 
-    if effective.timestamp_format:
-        df["timestamp"] = pd.to_datetime(
-            df["timestamp"],
-            format=effective.timestamp_format,
-            errors="coerce",
-            utc=False,
-        )
-    else:
-        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce", utc=False)
+    df["timestamp"] = to_datetime_robust(
+        df["timestamp"], format=effective.timestamp_format or None, utc=False
+    )
 
     if "end_timestamp" in df.columns:
-        df["end_timestamp"] = pd.to_datetime(df["end_timestamp"], errors="coerce", utc=False)
+        df["end_timestamp"] = to_datetime_robust(df["end_timestamp"], utc=False)
 
     if "cost" in df.columns:
         df["cost"] = pd.to_numeric(df["cost"], errors="coerce")

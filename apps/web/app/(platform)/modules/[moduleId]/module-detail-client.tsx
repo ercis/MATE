@@ -1,14 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { ArrowLeft, FileBox, ShieldAlert, Trash2 } from "lucide-react";
+import { FileBox, Lock, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { toastError } from "@/lib/toast";
+import { useProgressRouter } from "@/lib/use-progress-router";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ActionButton } from "@/components/ui/action-button";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -19,6 +19,7 @@ import {
   ModuleConfigForm,
   type ConfigSchema,
 } from "@/components/modules/module-config-form";
+import { ModuleAboutInfo } from "@/components/modules/module-about";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -56,6 +57,7 @@ import {
   type AiModelsManifest,
   type ModelStoreManifest,
 } from "@/lib/queries";
+import type { ManifestArtifact, ManifestSource } from "@/lib/api-types";
 
 interface AiConfigDraft {
   llm: AiModelSelection;
@@ -92,7 +94,7 @@ function readAiDraft(cfg: Record<string, unknown>): AiConfigDraft {
 }
 
 export function ModuleDetailClient({ moduleId }: { moduleId: string }) {
-  const router = useRouter();
+  const router = useProgressRouter();
   const { data: cfg } = useModuleConfig(moduleId);
   const { data: manifest, isLoading: manifestLoading, isError: manifestError } =
     useModuleManifest(moduleId);
@@ -100,9 +102,16 @@ export function ModuleDetailClient({ moduleId }: { moduleId: string }) {
   const update = useUpdateModuleConfig();
   const recreateIndex = useRecreateModuleIndex(moduleId);
 
-  // Admin-locked module config: every config surface (schema form, AI-model
-  // cards, enabled switch, Save) goes read-only and shows a banner.
-  const controlled = cfg?.controlled_by_admin ?? false;
+  // Per-card admin locks: each settings card (config / ai / model) can be
+  // locked independently, so each goes read-only on its own. `enabled` is
+  // per-user install state and stays editable regardless. controlled_by_admin
+  // is the back-compat "every card locked" flag.
+  const controlledCards = cfg?.controlled_cards ?? {};
+  const configLocked = controlledCards.config ?? false;
+  const aiLocked = controlledCards.ai ?? false;
+  const modelLocked = controlledCards.model ?? false;
+  const anyLocked = configLocked || aiLocked || modelLocked;
+  const allLocked = cfg?.controlled_by_admin ?? false;
 
   const schema = (manifest?.config_schema as ConfigSchema | undefined) ?? null;
   const properties = schema?.properties ?? {};
@@ -146,6 +155,10 @@ export function ModuleDetailClient({ moduleId }: { moduleId: string }) {
         version: manifest.version as string,
         category: manifest.category as string,
         description: (manifest.description as string | null) ?? null,
+        about: (manifest.about as string | null) ?? null,
+        source: (manifest.source as ManifestSource[] | undefined) ?? [],
+        artifacts: (manifest.artifacts as ManifestArtifact[] | undefined) ?? [],
+        license: (manifest.license as string | null) ?? null,
         provides: (manifest.provides as string[]) ?? [],
         consumes: (manifest.consumes as string[]) ?? [],
       }
@@ -168,7 +181,6 @@ export function ModuleDetailClient({ moduleId }: { moduleId: string }) {
   };
 
   const onToggleEnabled = async (val: boolean) => {
-    if (controlled) return;
     setEnabled(val);
     try {
       await update.mutateAsync({
@@ -188,7 +200,8 @@ export function ModuleDetailClient({ moduleId }: { moduleId: string }) {
   };
 
   const onSaveConfig = async () => {
-    if (controlled) return;
+    // No client-side lock guard: the server strips any admin-locked card's
+    // slice from the payload, so saving from an unlocked card still works.
     try {
       await update.mutateAsync({
         id: moduleId,
@@ -207,7 +220,7 @@ export function ModuleDetailClient({ moduleId }: { moduleId: string }) {
   };
 
   const onSelectModel = async (name: string) => {
-    if (controlled) return;
+    if (modelLocked) return;
     const next = { ...draft, [modelConfigKey]: name };
     setDraft(next);
     await update.mutateAsync({
@@ -249,18 +262,13 @@ export function ModuleDetailClient({ moduleId }: { moduleId: string }) {
 
   return (
     <PageContainer className="space-y-4">
-      <Button asChild variant="ghost" size="sm" className="cursor-pointer -ml-2 gap-1">
-        <Link href="/modules">
-          <ArrowLeft className="h-3.5 w-3.5" /> Back to modules
-        </Link>
-      </Button>
-
-      {controlled && (
-        <div className="flex items-start gap-2.5 rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
-          <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
+      {anyLocked && (
+        <div className="flex items-start gap-2.5 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          <Lock className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
-            This module&apos;s configuration is controlled by your administrator
-            and is read-only. The shared settings below apply to your account.
+            {allLocked
+              ? "This module is controlled by your administrator. Its settings cannot be changed."
+              : "Some settings on this module are controlled by your administrator and are read-only."}
           </span>
         </div>
       )}
@@ -274,6 +282,15 @@ export function ModuleDetailClient({ moduleId }: { moduleId: string }) {
                 {m.category.replace("_", " ")}
               </Badge>
               <span className="text-xs font-normal text-muted-foreground">{m.version}</span>
+              <ModuleAboutInfo
+                name={m.name}
+                description={m.description}
+                about={m.about}
+                sources={m.source}
+                artifacts={m.artifacts}
+                license={m.license}
+                version={m.version}
+              />
             </CardTitle>
             <div className="flex items-center gap-2 shrink-0">
               {cfgLoading ? (
@@ -287,7 +304,7 @@ export function ModuleDetailClient({ moduleId }: { moduleId: string }) {
                     id="module-enabled"
                     checked={enabled}
                     onCheckedChange={onToggleEnabled}
-                    disabled={update.isPending || controlled}
+                    disabled={update.isPending}
                   />
                 </>
               )}
@@ -317,6 +334,7 @@ export function ModuleDetailClient({ moduleId }: { moduleId: string }) {
                 embeddingSlot={aiManifest.embedding}
                 value={moduleAiDraft}
                 onChange={setModuleAiDraft}
+                disabled={aiLocked}
               />
             ) : (
               <>
@@ -327,6 +345,7 @@ export function ModuleDetailClient({ moduleId }: { moduleId: string }) {
                     description={aiManifest.llm.description}
                     value={aiDraft.llm}
                     onChange={(next) => setAiDraft((d) => ({ ...d, llm: next }))}
+                    disabled={aiLocked}
                   />
                 )}
                 {aiManifest.embedding && (
@@ -338,6 +357,7 @@ export function ModuleDetailClient({ moduleId }: { moduleId: string }) {
                     allowProviders={EMBEDDING_PROVIDERS}
                     preferEmbeddingModels
                     showDimensions
+                    disabled={aiLocked}
                   />
                 )}
               </>
@@ -351,7 +371,7 @@ export function ModuleDetailClient({ moduleId }: { moduleId: string }) {
                       size="sm"
                       variant="outline"
                       className="cursor-pointer text-destructive hover:bg-destructive/10"
-                      disabled={recreateIndex.isPending}
+                      disabled={recreateIndex.isPending || aiLocked}
                     >
                       Recreate Pinecone index
                     </Button>
@@ -391,14 +411,16 @@ export function ModuleDetailClient({ moduleId }: { moduleId: string }) {
               ) : (
                 <span />
               )}
-              <Button
+              <ActionButton
                 size="sm"
                 onClick={onSaveConfig}
-                disabled={update.isPending || cfgLoading || controlled}
+                isPending={update.isPending}
+                isSuccess={update.isSuccess}
+                disabled={cfgLoading || aiLocked}
                 className="cursor-pointer"
               >
                 Save AI models
-              </Button>
+              </ActionButton>
             </div>
           </CardContent>
         </Card>
@@ -429,24 +451,27 @@ export function ModuleDetailClient({ moduleId }: { moduleId: string }) {
             ) : (
               <>
                 {hasSchema && (
-                  <ModuleConfigForm
-                    properties={properties}
-                    values={draft}
-                    onChange={(key, val) => setDraft((d) => ({ ...d, [key]: val }))}
-                    disabled={controlled}
-                  />
+                  <div className={configLocked ? "opacity-60" : undefined}>
+                    <ModuleConfigForm
+                      properties={properties}
+                      values={draft}
+                      onChange={(key, val) => setDraft((d) => ({ ...d, [key]: val }))}
+                      disabled={configLocked}
+                    />
+                  </div>
                 )}
-                {hasSchema && !controlled && <Separator />}
-                {!controlled && (
+                {hasSchema && !configLocked && <Separator />}
+                {!configLocked && (
                   <div className="flex justify-end">
-                    <Button
+                    <ActionButton
                       size="sm"
                       onClick={onSaveConfig}
-                      disabled={update.isPending}
+                      isPending={update.isPending}
+                      isSuccess={update.isSuccess}
                       className="cursor-pointer"
                     >
                       Save configuration
-                    </Button>
+                    </ActionButton>
                   </div>
                 )}
               </>

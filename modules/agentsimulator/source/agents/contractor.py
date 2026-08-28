@@ -1,9 +1,9 @@
-import random
 import math
-from datetime import datetime
-from mesa import Agent
-import scipy.stats as st
+import random
 import time
+
+import scipy.stats as st
+from mesa import Agent
 
 
 class ContractorAgent(Agent):

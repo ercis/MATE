@@ -25,6 +25,10 @@ from mate.api.db.models import ControlPolicy
 
 SCOPE_SETTING = "setting"
 SCOPE_MODULE = "module"
+# Per-card module control (mate.api.modules.cards): one policy per settings
+# card, keyed ``"<module_id>:<card_id>"``. Supersedes the coarse whole-module
+# ``SCOPE_MODULE`` lock (kept only for the 0012 migration's back-compat read).
+SCOPE_CARD = "card"
 
 MODE_USER = "user"
 MODE_ADMIN = "admin"

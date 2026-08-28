@@ -11,6 +11,8 @@ import argparse
 
 import uvicorn
 
+from mate.api.shutdown import set_shutdown_probe
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="mate-api")
@@ -19,12 +21,31 @@ def main() -> None:
     parser.add_argument("--reload", action="store_true")
     args = parser.parse_args()
 
-    uvicorn.run(
+    # Reload mode runs the app inside a reloader-managed subprocess, so a Server
+    # built here isn't the one serving requests - keep the string form and leave
+    # the shutdown probe unregistered (SSE falls back to the grace timeout).
+    if args.reload:
+        uvicorn.run(
+            "mate.api.main:app",
+            host=args.host,
+            port=args.port,
+            reload=True,
+            timeout_graceful_shutdown=10,
+        )
+        return
+
+    # Prod: own the Server so SSE streams can poll `should_exit` and self-close
+    # during the connection-drain phase, before the grace timeout force-cancels
+    # them (which otherwise dumps a CancelledError ASGI traceback on shutdown).
+    config = uvicorn.Config(
         "mate.api.main:app",
         host=args.host,
         port=args.port,
-        reload=args.reload,
+        timeout_graceful_shutdown=10,
     )
+    server = uvicorn.Server(config)
+    set_shutdown_probe(lambda: server.should_exit)
+    server.run()
 
 
 if __name__ == "__main__":

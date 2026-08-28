@@ -11,7 +11,6 @@ import {
 } from "recharts";
 
 import { useEvolution, type Granularity } from "../panel/queries";
-import { ChartFrame, LegendDot } from "./_kit";
 
 /**
  * Cases started vs. completed per period. When arrivals run above completions
@@ -88,3 +87,4 @@ export default function ArrivalsCompletions({
     </ChartFrame>
   );
 }
+import {ChartFrame, LegendDot} from "@/components/dashboards/kit";

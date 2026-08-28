@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { useCancelJob } from "@/lib/queries";
 import { parseJobTitle, type LiveJob } from "@/lib/stores/jobs";
-import { jobProgress } from "@/lib/job-progress";
+import { jobProgress, stageLabel } from "@/lib/job-progress";
+import { formatDuration } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
 /**
@@ -19,8 +20,12 @@ import { cn } from "@/lib/cn";
 export function JobChildRow({ job }: { job: LiveJob }) {
   const cancel = useCancelJob();
   const { name: cleanTitle } = parseJobTitle(job);
-  const { pct, label } = jobProgress(job);
+  const { pct, label, eta } = jobProgress(job);
   const running = job.status === "running";
+  // Cheap ETA: only when the step reports a determinate fraction (jobProgress
+  // derives `eta` from elapsed rate × remaining). Indeterminate steps skip it.
+  const runningLabel =
+    eta != null && Number.isFinite(eta) ? `${label} · ETA ${formatDuration(eta)}` : label;
   const isError = job.status === "failed";
   const isActive =
     job.status === "running" || job.status === "queued" || job.status === "paused";
@@ -38,7 +43,7 @@ export function JobChildRow({ job }: { job: LiveJob }) {
                 isError ? "text-destructive" : "text-muted-foreground",
               )}
             >
-              {isError ? "Failed" : running ? label : statusLabel(job.status)}
+              {isError ? "Failed" : running ? runningLabel : statusLabel(job.status)}
             </span>
             {isActive && (
               <Button
@@ -71,9 +76,7 @@ export function JobChildRow({ job }: { job: LiveJob }) {
         )}
         {(job.stage || job.message) && running && (
           <div className="truncate text-[11px] text-muted-foreground">
-            {job.stage && (
-              <span className="font-medium uppercase tracking-wide">{job.stage}</span>
-            )}
+            {job.stage && <span className="font-medium">{stageLabel(job.stage)}</span>}
             {job.stage && job.message && <span className="mx-1">·</span>}
             {job.message}
           </div>
@@ -88,21 +91,28 @@ export function JobChildRow({ job }: { job: LiveJob }) {
  * (its upstream hasn't finished, so the platform hasn't submitted it) or
  * `skipped` (an upstream failed, so its `<upstream>.completed` trigger will never
  * fire). Mirrors `JobChildRow`'s layout so the checklist stays aligned.
+ *
+ * `name`/`waitingOnNames` are display names resolved by the caller (one
+ * `useModuleNames()` per group, not per row). They fall back to the raw id, so a
+ * row is never blank; the id stays reachable as the row's `title`, and the
+ * drawer's id-based filter keeps working.
  */
 export function PrecomputeStepRow({
   moduleId,
+  name,
   state,
-  waitingOn,
+  waitingOnNames,
 }: {
   moduleId: string;
+  name: string;
   state: "waiting" | "skipped";
-  waitingOn: string[];
+  waitingOnNames: string[];
 }) {
   const label =
     state === "skipped"
       ? "Skipped"
-      : waitingOn.length > 0
-        ? `Waiting on ${waitingOn.join(", ")}`
+      : waitingOnNames.length > 0
+        ? `Waiting on ${waitingOnNames.join(", ")}`
         : "Waiting";
 
   return (
@@ -115,6 +125,7 @@ export function PrecomputeStepRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
           <div
+            title={moduleId}
             className={cn(
               "truncate text-xs font-medium leading-tight",
               state === "skipped"
@@ -122,7 +133,7 @@ export function PrecomputeStepRow({
                 : "text-muted-foreground",
             )}
           >
-            {moduleId}
+            {name}
           </div>
           <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
             {label}

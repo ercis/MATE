@@ -4,7 +4,7 @@ import { useEffect, useState, type ComponentType } from "react";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import { rawFetch } from "@/lib/api";
-import { installModuleRuntime } from "@/lib/module-runtime";
+import { CORE_EXTERNALS, installModuleRuntime, scanBundleExternals } from "@/lib/module-runtime";
 
 export interface ModulePanelProps {
   logId: string;
@@ -77,9 +77,13 @@ async function loadPanel(moduleId: string): Promise<AnyComponent> {
   if (pending) return pending;
 
   const promise = (async () => {
-    // Runtime must be installed before the bundle's require() shim fires.
-    // installModuleRuntime() is idempotent and a no-op on the server.
-    await installModuleRuntime();
+    // The core externals are needed by every bundle, so start them now and let
+    // them stream in parallel with the bundle fetch instead of gating it. The
+    // rest is installed from the bundle's own require() calls below - the two
+    // used to be one eager all-externals install ahead of the fetch, which
+    // both serialised the two big transfers and pulled in ~650 KB gzip of
+    // dependencies the panel never touches.
+    const core = installModuleRuntime(CORE_EXTERNALS);
     const res = await rawFetch(
       `/api/v1/modules/${encodeURIComponent(moduleId)}/assets/panel.js`,
     );
@@ -87,6 +91,8 @@ async function loadPanel(moduleId: string): Promise<AnyComponent> {
       throw new Error(`Failed to load module panel ${moduleId} (HTTP ${res.status}).`);
     }
     const source = await res.text();
+    // Runtime must be complete before the bundle's require() shim fires.
+    await Promise.all([core, installModuleRuntime(scanBundleExternals(source))]);
     const moduleObj: { exports: Record<string, unknown> } = { exports: {} };
     // Module bundles are CJS. We treat the source as the body of an IIFE so
     // top-level `var ...` doesn't leak into globals.
@@ -112,6 +118,16 @@ async function loadPanel(moduleId: string): Promise<AnyComponent> {
   } finally {
     _inflight.delete(moduleId);
   }
+}
+
+/**
+ * Fire-and-forget warm-up for a panel bundle (hover/focus intent on module
+ * links). Dedup comes free from `_panelCache`/`_inflight`; failures are
+ * swallowed – the real navigation retries and surfaces the error UI.
+ */
+export function prefetchModulePanel(moduleId: string): void {
+  if (typeof window === "undefined") return;
+  void loadPanel(moduleId).catch(() => {});
 }
 
 /** Async React component that resolves the dynamic bundle on mount. */
@@ -158,12 +174,28 @@ export function getModulePanel(
   return DynamicModulePanel;
 }
 
+// The most-seen skeleton in the app: shown while the runtime installs on the
+// first panel visit AND while any panel bundle loads. Shaped like a typical
+// module panel (title, toolbar/tab strip, canvas, stat row) to minimise the
+// layout jump when the real panel lands.
 function PanelSkeleton() {
   return (
     <div className="space-y-4">
-      <Skeleton className="h-8 w-72" />
-      <Skeleton className="h-4 w-96" />
-      <Skeleton className="h-96 w-full" />
+      <div className="space-y-2">
+        <Skeleton className="h-8 w-72 max-w-full" />
+        <Skeleton className="h-4 w-96 max-w-full" />
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <Skeleton key={i} className="h-9 w-24 rounded-md" />
+        ))}
+      </div>
+      <Skeleton className="h-[28rem] w-full rounded-xl" />
+      <div className="grid gap-4 sm:grid-cols-3">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <Skeleton key={i} className="h-16 w-full rounded-xl" />
+        ))}
+      </div>
     </div>
   );
 }

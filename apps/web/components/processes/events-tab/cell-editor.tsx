@@ -15,7 +15,7 @@ import type { ColumnSpec } from "@/lib/api-types";
 import { ApiError } from "@/lib/api";
 import { usePatchEventRow } from "@/lib/queries";
 import { cn } from "@/lib/cn";
-import { formatDuration } from "@/lib/format";
+import { formatDuration, toLocalInputString, toNaiveUtcString } from "@/lib/format";
 
 export interface CellEditorProps {
   logId: string;
@@ -217,14 +217,11 @@ function CellInput({
 function toInputValue(value: unknown, column: ColumnSpec): string {
   if (value === null || value === undefined) return "";
   if (column.type === "datetime") {
+    // The API serves UTC ISO with offset; datetime-local wants the *local*
+    // wall-clock (matching what formatCell shows next to it).
     const d = new Date(String(value));
     if (Number.isNaN(d.getTime())) return String(value);
-    // datetime-local expects YYYY-MM-DDTHH:MM:SS – strip tz.
-    const pad = (n: number) => String(n).padStart(2, "0");
-    return (
-      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
-      `T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-    );
+    return toLocalInputString(d.getTime());
   }
   return String(value);
 }
@@ -245,8 +242,11 @@ function parseDraft(draft: string, column: ColumnSpec): unknown {
     return draft === "true" || draft === "1";
   }
   if (column.type === "datetime") {
-    // datetime-local already gives us a parseable string.
-    return draft;
+    // datetime-local is *local* wall-clock; the backend stores naive UTC, so
+    // convert to the instant's UTC components before sending (otherwise every
+    // touched cell would drift by the viewer's UTC offset).
+    const ms = Date.parse(draft);
+    return Number.isNaN(ms) ? draft : toNaiveUtcString(ms);
   }
   return draft;
 }

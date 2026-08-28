@@ -17,9 +17,9 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable, Iterable
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Iterable, Optional
 
 import pypdf
 from langchain_core.language_models import BaseChatModel
@@ -32,7 +32,7 @@ KB_NS = "bpm-kb"
 SUPPORTED_SUFFIXES = {".pdf", ".pptx", ".png", ".jpg", ".jpeg", ".docx", ".txt"}
 
 
-def get_timestamp_from_filename(filename: str) -> Optional[int]:
+def get_timestamp_from_filename(filename: str) -> int | None:
     """Parse a leading `YYYY-MM-DD_` prefix into a Unix timestamp."""
     try:
         date_str = filename.split("_", 1)[0]
@@ -157,8 +157,8 @@ def process_context_files(
     embedder,
     vision_llm: BaseChatModel,
     namespace: str,
-    cache_dir: Optional[Path] = None,
-    progress: Optional[Callable[[float, str], None]] = None,
+    cache_dir: Path | None = None,
+    progress: Callable[[float, str], None] | None = None,
 ) -> dict:
     """Ingest a batch of files into the given Pinecone namespace.
 

@@ -6,8 +6,26 @@ description: >-
   Turns your event log into a process model and shows it as a directly-follows
   graph, Petri net (Alpha or Inductive miner), process tree, heuristics net, or
   BPMN diagram.
+about: >-
+  See how your process actually runs: this module mines your event log into a
+  process map and lets you switch between a directly-follows graph, Petri net,
+  process tree, heuristics net, or BPMN diagram. Use it to understand the real
+  flow of work, find the most frequent activities and paths, and get a model you
+  can export or use as a reference for conformance checking.
 keywords: ["process model", "discover", "discovery", "dfg", "petri net", "bpmn", "process tree", "model", "variants", "paths"]
-author: van der Aalst
+source:
+  - title: "Workflow mining: Discovering process models from event logs"
+    fullCitation: >-
+      W. M. P. van der Aalst, A. J. M. M. Weijters, and L. Maruster, "Workflow
+      mining: Discovering process models from event logs," IEEE Trans. Knowl.
+      Data Eng., vol. 16, no. 9, pp. 1128-1142, 2004
+    url: https://doi.org/10.1109/TKDE.2004.47
+  - title: "An optimized approach for generating backbone-based process maps"
+    fullCitation: >-
+      D. Lee, M. Song, and W. M. P. van der Aalst, "An optimized approach for
+      generating backbone-based process maps," Data Knowl. Eng., vol. 164,
+      102601, 2026
+    url: https://doi.org/10.1016/j.datak.2026.102601
 license: MIT
 default_enabled: true
 # Runs entirely locally – safe to use against confidential event logs.
@@ -27,6 +45,7 @@ requirements:
 
 provides:
   - discovery.dfg
+  - discovery.dfg_layout
   - discovery.petri_net.alpha
   - discovery.petri_net.inductive
   - discovery.process_tree
@@ -39,11 +58,19 @@ consumes:
 dependencies:
   python:
     requires-python: ">=3.12"
-    packages: []
+    packages:
+      # CP-SAT for the backbone layout's rank IP (POST /dfg/layout). Imported
+      # lazily inside the offload worker only — never in the API event loop.
+      # Missing/broken install degrades to heuristic ranks (solver.status
+      # "fallback_no_solver"), it never 500s.
+      - "ortools>=9.11,<10"
     inherit:
       - pm4py
       - pandas
       - duckdb
+      # Component extraction in the layout pipeline; already in the platform
+      # venv as a pm4py transitive dependency.
+      - networkx
     isolation: in_process
 
 frontend:
@@ -54,18 +81,31 @@ frontend:
       title: Process overview
       description: Activity, connection and start/end counts of the discovered map.
       icon: Workflow
-      # Fixed-size summary scorecard (4 counts): locked to a size that shows them all.
-      default_w: 7
+      # Summary scorecard (4 counts): min sized to show them all.
+      default_w: 4
       default_h: 8
-      resizable: false
+      min_w: 3
+      min_h: 4
+      # Ids must match FIGURES in widgets/ProcessOverview.tsx.
+      kpis:
+        - { id: activities, title: Activities, info: Distinct steps in the discovered process. }
+        - { id: connections, title: Connections, info: Distinct step-to-step transitions. }
+        - { id: start_activities, title: Start activities, info: How many different steps a case can begin with. }
+        - { id: end_activities, title: End activities, info: How many different steps a case can finish on. }
+      min_px_w: 280
+      min_px_h: 190
+      help:
+        what: "Headline counts for the discovered process: how many distinct activities and connections it has, and how many different ways cases start and end."
+        read: "More start and end activities than you expect usually means the log covers several processes, or that cases are being cut off at the extraction boundary."
+        computed: "Counted from the directly-follows graph of the currently filtered log."
     - id: activity-frequency
       entry: ./widgets/ActivityFrequency.tsx
       title: Activity frequency
       description: Most frequent activities in the discovered process.
       icon: BarChart3
-      default_w: 6
+      default_w: 3
       default_h: 9
-      min_w: 5
+      min_w: 3
       min_h: 6
       config_schema:
         properties:
@@ -79,15 +119,55 @@ frontend:
             default: 10
             ui:
               widget: slider
+      min_px_w: 300
+      min_px_h: 220
+      help:
+        what: "The activities that occur most often in the filtered log."
+        read: "Longer bars happen more often. This counts events, not cases — an activity that repeats within a case is counted each time."
+        computed: "Frequencies come from the directly-follows graph; the slider limits how many are drawn."
     - id: process-map
       entry: ./widgets/ProcessMap.tsx
       title: Process map
       description: Directly-follows graph of the dashboard-filtered event log.
       icon: Network
-      default_w: 8
+      default_w: 4
       default_h: 12
-      min_w: 6
+      min_w: 3
       min_h: 10
+      min_px_w: 360
+      min_px_h: 300
+      help:
+        what: "The directly-follows graph: which activities follow which, and how often."
+        read: "Thicker connections are travelled more often. A dense tangle means high variance in how cases actually run."
+        computed: "Built from the filtered log. The card has its own display settings — changing them here does not affect the module's own page."
+# Data-only outputs for the platform's generic visualization layer. Each points
+# at a route above; the platform normalizes the response into a shape-tagged
+# envelope and renders it with a generic viz (no module-authored component).
+datasets:
+  - id: dfg
+    title: Directly-follows graph
+    description: Activities and their directly-follows relations (frequency + performance on edges).
+    icon: Network
+    shape: graph
+    route: /dfg
+  - id: petri_net
+    title: Petri net
+    description: Petri net mined with the Inductive miner (places, transitions, arcs).
+    icon: Workflow
+    shape: graph
+    route: /petri-net/inductive
+  - id: process_tree
+    title: Process tree
+    description: Hierarchical process tree of the discovered model.
+    icon: ListTree
+    shape: tree
+    route: /process-tree
+  - id: heuristics_net
+    title: Heuristics net
+    description: Dependency graph mined with the Heuristics miner.
+    icon: Network
+    shape: graph
+    route: /heuristics-net
 
 permissions:
   - read:event_log
@@ -130,4 +210,57 @@ config_schema:
       ui:
         widget: slider
         group: viz
+        affects: compute
+    layout_solver_time_limit_s:
+      type: number
+      title: Layout solver time limit
+      description: >-
+        Wall-clock budget (seconds) for the backbone layout's rank optimizer;
+        on timeout the best solution found so far is used.
+      minimum: 1
+      maximum: 60
+      step: 1
+      default: 10
+      ui:
+        widget: slider
+        group: layout
+        affects: compute
+    layout_allow_horizontal_edges:
+      type: boolean
+      title: Horizontal edges
+      description: >-
+        Allow mutually-connected activity pairs to share a row in the backbone
+        layout (the paper's signature look). Off forces a strict layering.
+      default: true
+      ui:
+        widget: switch
+        group: layout
+        affects: compute
+    layout_lambda_sq:
+      type: number
+      title: Edge-length weight
+      description: >-
+        Weight of the squared rank-span term in the backbone layout objective.
+        Higher values fight long and upward edges harder.
+      minimum: 0.1
+      maximum: 10
+      step: 0.1
+      default: 1
+      ui:
+        widget: slider
+        group: layout
+        affects: compute
+    layout_lambda_end:
+      type: number
+      title: Compactness weight
+      description: >-
+        Weight of the final-rank term in the backbone layout objective. Higher
+        values produce shorter maps at the cost of straighter edges.
+      minimum: 0.1
+      maximum: 10
+      step: 0.1
+      default: 1
+      ui:
+        widget: slider
+        group: layout
         affects: compute

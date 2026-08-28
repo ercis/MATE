@@ -1,0 +1,14 @@
+GPL-3.0-only
+
+This module ("actor_performance") is licensed under the GNU General Public License
+v3.0 because it imports and builds on PromG (https://github.com/PromG-dev/promg-core),
+which is distributed under GPL-3.0.
+
+Full license text: https://www.gnu.org/licenses/gpl-3.0.txt
+
+The behavior-classification semantics implement:
+  E. L. Klijn, I. Tentina, D. Fahland, F. Mannhardt,
+  "Decomposing Process Performance based on Actor Behavior", ICPM 2024,
+  https://doi.org/10.1109/ICPM63005.2024.10680657
+Reference implementation (no license file; queries rewritten with credit):
+  https://github.com/multi-dimensional-process-mining/ekg_bpic17_decomposing_performance_by_actor_behavior

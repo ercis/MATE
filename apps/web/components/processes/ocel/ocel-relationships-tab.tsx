@@ -10,9 +10,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useOcelObjectTypes, useOcelOverview, useOcelRelationships } from "@/lib/queries";
+import { OCEL_PAGE_SIZE } from "@/lib/query-keys";
 import { OcelDataTable } from "./ocel-data-table";
 
-const LIMIT = 100;
+// Shared with prefetchProcessTabs (client-prefetch.ts) for query-key parity.
+const LIMIT = OCEL_PAGE_SIZE;
 const ALL = "__all__";
 
 /** The flattened event↔object relations table – which objects each event

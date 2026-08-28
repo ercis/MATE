@@ -1,12 +1,15 @@
-from typing import List, Optional
+
 import pandas as pd
 
-from source.agent_types.resource_calendar import RCalendar
-from source.agent_types.calendar_discovery_parameters import CalendarDiscoveryParameters, CalendarType
+from source.agent_types.calendar_discovery_parameters import (
+    CalendarDiscoveryParameters,
+)
 from source.agent_types.factory import CalendarFactory
+from source.agent_types.resource_calendar import RCalendar
 from source.agent_types.roles import ResourceProfile
 
-def _update_resource_calendars(resource_profiles: List[ResourceProfile], calendar_id: str):
+
+def _update_resource_calendars(resource_profiles: list[ResourceProfile], calendar_id: str):
     for resource_profile in resource_profiles:
         for resource in resource_profile.resources:
             resource.calendar_id = calendar_id
@@ -15,9 +18,9 @@ def discover_resource_calendars_per_profile(
     event_log: pd.DataFrame,
     # log_ids: EventLogIDs,
     params: CalendarDiscoveryParameters,
-    resource_profiles: List[ResourceProfile],
+    resource_profiles: list[ResourceProfile],
     pools,
-) -> List[RCalendar]:
+) -> list[RCalendar]:
     # Revert resource profiles
     resource_to_profile = {
         resource.id: resource_profile.id
@@ -140,7 +143,7 @@ def _discover_undifferentiated_resource_calendar(
     # log_ids: EventLogIDs,
     params: CalendarDiscoveryParameters,
     # calendar_id: str = "Undifferentiated_calendar",
-) -> Optional[RCalendar]:
+) -> RCalendar | None:
     """
     Discover one availability calendar using all the timestamps in the received event log.
 

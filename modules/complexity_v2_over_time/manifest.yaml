@@ -1,0 +1,176 @@
+id: complexity_v2_over_time
+name: Complexity V2 Over Time
+version: 1.0.0
+category: advanced
+description: >-
+  Tracks how the full Complexity V2 suite (Langer's Table 3.3: entropy, size,
+  variation and distance metrics) changes over time. It splits the log into
+  time slices, scores each one with the same 28-metric suite as Complexity V2,
+  and plots the trend so you can see when the process became simpler or more
+  chaotic.
+about: >-
+  Watch the whole complexity picture as a trend instead of a snapshot: the log
+  is split into time slices and each slice is scored with Langer's full metric
+  suite (entropy, size, variation, distance), so you can see exactly when — and
+  in which dimension — your process became simpler or more chaotic. Use it to
+  verify that a redesign or automation rollout actually simplified day-to-day
+  work, and to catch creeping complexity (new variants, longer edit distances)
+  before it hurts performance.
+keywords:
+  ["complexity over time", "complexity trend", "entropy over time", "edit distance over time", "complexity timeline", "kpi over time"]
+source:
+  - title: >-
+      Understanding business process complexity: Exploring metrics,
+      relationships, and temporal dynamics in the context of process drift
+    fullCitation: >-
+      E. Langer, "Understanding business process complexity: Exploring metrics,
+      relationships, and temporal dynamics in the context of process drift,"
+      master's thesis, University of Münster, 2025
+  - title: >-
+      The connection between process complexity of event sequences and models
+      discovered by process mining
+    fullCitation: >-
+      A. Augusto, J. Mendling, M. Vidgof, and B. Wurm, "The connection between
+      process complexity of event sequences and models discovered by process
+      mining," Inf. Sci., vol. 598, pp. 196-215, 2022
+    url: https://doi.org/10.1016/j.ins.2022.03.072
+artifacts:
+  - name: Master Thesis Assessment of Process Complexity Measures
+    url: https://github.com/MrWaitomo/WWU_processcomplexity
+license: MIT
+default_enabled: true
+# Runs entirely locally – safe to use against confidential event logs.
+isConfidentialSafe: true
+
+requirements:
+  event_log:
+    # Case-centric: runs on a classic event log (one case per trace). Never
+    # appears for object-centric (OCEL) logs.
+    log_model: case_centric
+    required_columns:
+      - case_id
+      - activity
+      - timestamp
+    min_events: 50
+    min_cases: 2
+
+provides:
+  - complexity_v2_over_time.timeseries
+
+consumes:
+  - log.imported
+
+dependencies:
+  python:
+    requires-python: ">=3.12"
+    packages: []
+    inherit:
+      - pm4py
+      - pandas
+      - duckdb
+      - numpy
+      - scipy
+    isolation: in_process
+
+frontend:
+  panel: ./panel/index.tsx
+  widgets:
+    - id: complexity-v2-trend
+      entry: ./widgets/ComplexityV2Trend.tsx
+      title: Complexity V2 trend
+      description: A Complexity V2 metric plotted over evenly-sized time slices.
+      icon: TrendingUp
+      default_w: 4
+      default_h: 8
+      min_w: 3
+      min_h: 6
+      config_schema:
+        properties:
+          metric:
+            type: string
+            title: Metric
+            description: Which Complexity V2 measure to plot over time.
+            default: nseq_e
+            enum:
+              - nseq_e
+              - nvar_e
+              - seq_e
+              - var_e
+              - activity_var
+              - order_var
+              - lempel_ziv
+              - avg_edit_distance
+              - structural_var
+              - affinity
+              - structure
+            enumLabels:
+              - Normalized sequence entropy
+              - Normalized variant entropy
+              - Sequence entropy
+              - Variant entropy
+              - Activity variation
+              - Order variation
+              - Lempel–Ziv
+              - Average edit distance
+              - Structural process variety
+              - Average affinity
+              - Structure
+            ui:
+              widget: select
+          slices:
+            type: integer
+            title: Time slices
+            description: Number of equal-duration bins the timeline is split into.
+            minimum: 4
+            maximum: 50
+            step: 1
+            default: 12
+            ui:
+              widget: slider
+      min_px_w: 320
+      min_px_h: 220
+      help:
+        what: "How the extended complexity measures move over time."
+        read: "Diverging lines mean different kinds of complexity are changing independently."
+        computed: "Recomputed per time slice."
+permissions:
+  - read:event_log
+  - write:module_results
+
+config_schema:
+  properties:
+    max_variants_distance:
+      type: integer
+      title: Distance-metric variant cap
+      description: >-
+        Upper bound on the distinct trace variants used per slice for the
+        Levenshtein-based distance metrics (average edit distance, structural
+        variety). The most frequent variants are kept; larger values are more
+        faithful but cost O(n²) memory and time.
+      minimum: 25
+      maximum: 1000
+      default: 300
+      step: 25
+      ui:
+        widget: number
+        affects: compute
+    default_slices:
+      type: integer
+      title: Default number of slices
+      description: Default slice count for Absolute mode (timeline split into N equal-duration bins).
+      minimum: 2
+      maximum: 2000
+      default: 50
+      ui:
+        widget: number
+        affects: compute
+    min_cases_per_slice:
+      type: integer
+      title: Minimum cases per slice
+      description: Slices containing fewer cases than this render as a gap (null point) instead of a noisy metric.
+      minimum: 1
+      maximum: 1000
+      default: 1
+      ui:
+        widget: number
+        affects: compute

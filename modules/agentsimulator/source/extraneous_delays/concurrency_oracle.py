@@ -1,11 +1,13 @@
+import enum
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
+from dataclasses import dataclass, field
 
 import pandas as pd
 import polars as pl
-import enum
-from dataclasses import dataclass, field
+
 from source.extraneous_delays.event_log import DEFAULT_CSV_IDS, EventLogIDs
+
 
 class ReEstimationMethod(enum.Enum):
     SET_INSTANT = 1
@@ -233,7 +235,7 @@ class OverlappingConcurrencyOracle(ConcurrencyOracle):
         # Set flag to consider start times also when individually checking enabled time
         config.consider_start_times = True
         # Super
-        super(OverlappingConcurrencyOracle, self).__init__(concurrency=concurrency, config=config)
+        super().__init__(concurrency=concurrency, config=config)
 
 
 def _get_overlapping_matrix(event_log: pd.DataFrame, activities: set, config: Configuration) -> dict:

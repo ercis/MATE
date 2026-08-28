@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import contextlib
 import hashlib
 import importlib.util
 import inspect
@@ -47,13 +48,16 @@ from mate.api.modules.discovery import DiscoveredModule, discover, topo_sort
 from mate.api.modules.event_filters import FILTER_OPS
 from mate.api.modules.event_log_access import EventLogAccess
 from mate.api.modules.finder import get_finder, module_namespace, reset_finder
-from mate.api.modules.installer import install_module, venv_site_packages
+from mate.api.modules.installer import ModuleInstallError, venv_site_packages
 from mate.api.modules.installs import user_module_ids, user_owns_module
 from mate.api.modules.job_logs import get_job_log_buffer
+from mate.api.modules.job_worker import JobWorker
 from mate.api.modules.object_centric_log_access import ObjectCentricLogAccess
 from mate.api.modules.registry import CapabilityRegistry
+from mate.api.modules.runtimes import runtime_for
 from mate.api.modules.subprocess_host import SubprocessBridge
 from mate.api.sharing import user_can_read_log
+from mate.api.tasks import spawn
 from mate.sdk.context import ModuleContext
 from mate.sdk.decorators import (
     JobSpec,
@@ -281,16 +285,14 @@ class _BusForwardingLogger:
         # so unlike the bus publish below it also captures lines logged from inside
         # `asyncio.to_thread` module compute (no running loop there). Best-effort.
         if self._job_id:
-            try:
+            with contextlib.suppress(Exception):
                 get_job_log_buffer().append(self._job_id, level, event, kwargs)
-            except Exception:
-                pass
         # Best-effort: never let a logging side-effect break the handler.
         # `user_id` scopes the line to the owning tenant - the Settings logs
         # tail subscribes to `module.log.*` over the per-user WS, so without it
         # one user would see another's log fields (which can embed their data).
-        try:
-            asyncio.create_task(
+        with contextlib.suppress(Exception):
+            spawn(
                 self._bus.publish(
                     f"module.log.{level}",
                     {
@@ -302,8 +304,6 @@ class _BusForwardingLogger:
                     },
                 )
             )
-        except Exception:
-            pass
 
     def debug(self, event: str, **kw: Any) -> None:
         self._emit("debug", event, **kw)
@@ -424,6 +424,11 @@ def _decode_event_filter_header(raw: str | None) -> list[dict[str, Any]] | None:
             continue
         cleaned.append(entry)
     return cleaned or None
+
+
+# Public alias for first-party callers (datasets routes) that decode the
+# ephemeral filter header the same way module routes do.
+decode_event_filter_header = _decode_event_filter_header
 
 
 def _extra_handler_params(bound_method: Callable[..., Any]) -> list[inspect.Parameter]:
@@ -563,6 +568,10 @@ class ModuleLoader:
         # a fire-and-forget `@on_event` with no `@job` would otherwise strand a
         # log in `processing` forever (no job ever reaches a terminal status).
         self._precompute_subscribers: dict[str, set[str]] = {}
+        # Per-module-id locks serialising concurrent install/reload of one id
+        # (see `id_lock`). Created lazily; never pruned (bounded by id count).
+        self._id_locks: dict[str, asyncio.Lock] = {}
+        self._id_locks_guard = asyncio.Lock()
 
     async def load_all(self) -> list[LoadedModule]:
         discovered = discover(self.modules_dir, self.uploaded_modules_dir)
@@ -582,13 +591,19 @@ class ModuleLoader:
 
         for d in ordered:
             try:
-                site = await install_module(d.folder, d.manifest)
+                site = await runtime_for(d.manifest).materialize(d.folder, d.manifest)
                 if site is not None:
                     finder.register(
                         d.manifest.id,
                         site,
                         inherit=d.manifest.dependencies.python.inherit,
                     )
+            except ModuleInstallError as exc:
+                # Expected environmental failures (missing toolchain, ABI
+                # mismatch, missing jar) skip the module with the actionable
+                # message - a stack trace here is noise, not signal.
+                log.warning("modules.loader.install_skipped", module_id=d.id, error=str(exc))
+                continue
             except Exception as exc:
                 log.exception("modules.loader.install_failed", module_id=d.id, error=str(exc))
                 continue
@@ -642,6 +657,26 @@ class ModuleLoader:
         self._precompute_subscribers.clear()
         reset_finder()
 
+    async def id_lock(self, module_id: str) -> asyncio.Lock:
+        """Lock serialising install/reload of a single module id.
+
+        Two concurrent uploads of the same id (especially a brand-new one) would
+        otherwise race on the shared on-disk folder, the `uv venv` build, and the
+        route mount - `worker_concurrency` defaults to 2 and the `JobRuntime`
+        serialises nothing. The upload handler holds this across
+        stage-validate + `load_one` + record-owner, which also closes the
+        `module_owned_by_other` -> `record_install` check/record TOCTOU.
+
+        An `asyncio.Lock` suffices because we deploy single-process (no uvicorn
+        `--workers`); more than one worker would need a filesystem/DB lock.
+        """
+        async with self._id_locks_guard:
+            lock = self._id_locks.get(module_id)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._id_locks[module_id] = lock
+            return lock
+
     async def load_one(
         self,
         folder: Path,
@@ -655,7 +690,7 @@ class ModuleLoader:
             await self.unload_one(manifest.id)
 
         finder = get_finder()
-        site = await install_module(folder, manifest)
+        site = await runtime_for(manifest).materialize(folder, manifest)
         if site is not None:
             finder.register(
                 manifest.id,
@@ -916,7 +951,8 @@ class ModuleLoader:
         """Build a `Module` instance - either in-process or via a subprocess
         bridge depending on the manifest's `isolation` setting (§5.4)."""
         if d.manifest.dependencies.python.isolation == "subprocess":
-            bridge = SubprocessBridge(d.manifest, d.folder)
+            launch = runtime_for(d.manifest).launch_spec(d.folder, d.manifest)
+            bridge = SubprocessBridge(d.manifest, d.folder, launch)
             instance = await bridge.start()
             self._bridges[d.id] = bridge
         else:
@@ -1030,6 +1066,10 @@ class ModuleLoader:
     ) -> None:
         module_id = loaded.id
         router = loaded.sub_router
+        # Resolve the implementation per call (see `_live_handler`) - the route
+        # registered here outlives every reload, so it must never capture the
+        # instance it was bound against.
+        attr_name = bound_method.__name__
 
         # Forward any handler kwargs (besides `ctx`) to FastAPI as query
         # params so module routes can take typed inputs without each module
@@ -1039,13 +1079,14 @@ class ModuleLoader:
         if job_spec is None:
 
             async def _endpoint(**kwargs: Any) -> Any:
+                handler = self._require_live_handler(module_id, attr_name)
                 log_id = kwargs.pop("log_id", None)
                 user: CurrentUser = kwargs.pop("__ff_user")
                 filter_override = _decode_event_filter_header(kwargs.pop("__ff_event_filter", None))
                 ctx = await self._make_context(
                     module_id, log_id or "", user.id, filter_override=filter_override
                 )
-                return await self._invoke_handler(bound_method, ctx, **kwargs)
+                return await self._invoke_handler(handler, ctx, **kwargs)
 
             _endpoint.__signature__ = _build_endpoint_signature(extras)  # type: ignore[attr-defined]
         else:
@@ -1058,11 +1099,52 @@ class ModuleLoader:
             # Map of extra-arg name → annotation so the job runner can
             # re-hydrate Pydantic models from the serialized payload.
             extras_by_name = {p.name: p.annotation for p in extras}
+            job_type = f"module.{module_id}.{spec.path.lstrip('/').replace('/', '.') or 'root'}"
+
+            async def _job_handler(handle: JobHandle) -> None:
+                handler = self._live_handler(module_id, attr_name)
+                if handler is None:
+                    raise RuntimeError(
+                        f"Module {module_id!r} is not loaded - it was unloaded "
+                        f"before this job ran. Retry once it is back."
+                    )
+                ctx = await self._make_context(
+                    module_id,
+                    handle.payload.get("log_id", ""),
+                    handle.user_id,
+                    progress=_JobProgressAdapter(handle),
+                    cancellation=_JobCancellation(handle),
+                    filter_override=handle.payload.get("_filter_override"),
+                    job_id=handle.id,
+                )
+                # Tag the ctx with its job id so a subprocess bridge can map
+                # the per-call RPC token → job id and target the soft cancel.
+                ctx._ff_job_id = handle.id  # type: ignore[attr-defined]
+                raw = handle.payload.get("_extras") or {}
+                rebuilt: dict[str, Any] = {}
+                for name, value in raw.items():
+                    ann = extras_by_name.get(name)
+                    if (
+                        isinstance(ann, type)
+                        and issubclass(ann, BaseModel)
+                        and isinstance(value, dict)
+                    ):
+                        rebuilt[name] = ann.model_validate(value)
+                    else:
+                        rebuilt[name] = value
+                await self._invoke_handler(handler, ctx, **rebuilt)
+
+            # Bound once per (re)bind, not lazily on first request: a reload has
+            # to overwrite the previous closure (`replace=True`), or the runtime
+            # keeps running jobs against the module instance this loader replaced.
+            self.runtime.register(job_type, _job_handler, replace=True)
 
             async def _endpoint(**kwargs: Any) -> dict[str, str]:  # type: ignore[misc]
                 ctx_log_id = kwargs.pop("log_id", None) or ""
                 user: CurrentUser = kwargs.pop("__ff_user")
                 filter_override = _decode_event_filter_header(kwargs.pop("__ff_event_filter", None))
+                # 404 rather than queueing a job that can only fail.
+                self._require_live_handler(module_id, attr_name)
 
                 # Serialize forwarded args into the job payload. Pydantic
                 # models dump to dicts; primitives pass through. This is the
@@ -1074,38 +1156,6 @@ class ModuleLoader:
                         serialized_extras[name] = value.model_dump(mode="json")
                     else:
                         serialized_extras[name] = value
-
-                async def _job_handler(handle: JobHandle) -> None:
-                    ctx = await self._make_context(
-                        module_id,
-                        handle.payload.get("log_id", ""),
-                        handle.user_id,
-                        progress=_JobProgressAdapter(handle),
-                        cancellation=_JobCancellation(handle),
-                        filter_override=handle.payload.get("_filter_override"),
-                        job_id=handle.id,
-                    )
-                    # Tag the ctx with its job id so a subprocess bridge can map
-                    # the per-call RPC token → job id and target the soft cancel.
-                    ctx._ff_job_id = handle.id  # type: ignore[attr-defined]
-                    raw = handle.payload.get("_extras") or {}
-                    rebuilt: dict[str, Any] = {}
-                    for name, value in raw.items():
-                        ann = extras_by_name.get(name)
-                        if (
-                            isinstance(ann, type)
-                            and issubclass(ann, BaseModel)
-                            and isinstance(value, dict)
-                        ):
-                            rebuilt[name] = ann.model_validate(value)
-                        else:
-                            rebuilt[name] = value
-                    await self._invoke_handler(bound_method, ctx, **rebuilt)
-
-                # Register a one-shot handler under a unique type tag.
-                job_type = f"module.{module_id}.{spec.path.lstrip('/').replace('/', '.') or 'root'}"
-                if job_type not in self.runtime._handlers:  # type: ignore[attr-defined]
-                    self.runtime.register(job_type, _job_handler)
 
                 # Resolve callable title/subtitle at submission time (§5.6).
                 # The author's callable receives a stub ctx-like dict + the
@@ -1156,6 +1206,9 @@ class ModuleLoader:
     ) -> None:
         topic = sub_spec.topic
         module_id = loaded.id
+        # As in `_bind_route`: resolve the implementation per call so a reload
+        # swaps it (see `_live_handler`).
+        attr_name = bound_method.__name__
         # Record the subscription so `event_subscriber_module_ids` can answer
         # "which modules wait on `log.imported`?" at import time. A module may
         # subscribe via a wildcard (`log.*`) - kept verbatim and matched later.
@@ -1184,12 +1237,15 @@ class ModuleLoader:
                                 # A's module against B's data.
                                 if not await self._user_owns(event_user_id, module_id):
                                     continue
+                                handler = self._live_handler(module_id, attr_name)
+                                if handler is None:
+                                    continue
                                 ctx = await self._make_context(
                                     module_id,
                                     env.payload.get("log_id", ""),
                                     event_user_id,
                                 )
-                                await self._invoke_handler(bound_method, ctx, env.payload)
+                                await self._invoke_handler(handler, ctx, env.payload)
                             except Exception:
                                 log.exception(
                                     "modules.event_handler_failed",
@@ -1207,6 +1263,12 @@ class ModuleLoader:
         job_type = f"module.{module_id}.event.{topic.replace('.', '_')}"
 
         async def _job_handler(handle: JobHandle) -> None:
+            handler = self._live_handler(module_id, attr_name)
+            if handler is None:
+                raise RuntimeError(
+                    f"Module {module_id!r} is not loaded - it was unloaded "
+                    f"before this job ran. Retry once it is back."
+                )
             event_payload = handle.payload.get("_event_payload", {})
             ctx = await self._make_context(
                 module_id,
@@ -1217,10 +1279,11 @@ class ModuleLoader:
                 job_id=handle.id,
             )
             ctx._ff_job_id = handle.id  # type: ignore[attr-defined]
-            await self._invoke_handler(bound_method, ctx, event_payload)
+            await self._invoke_handler(handler, ctx, event_payload)
 
-        if job_type not in self.runtime._handlers:  # type: ignore[attr-defined]
-            self.runtime.register(job_type, _job_handler)
+        # `replace=True`: `_rebind_events` runs on every load/unload, and the
+        # previous closure would otherwise keep serving this topic forever.
+        self.runtime.register(job_type, _job_handler, replace=True)
 
         static_title_default = f"{module_id}.{topic}"
         static_subtitle_default = f"{module_id} · on {topic}"
@@ -1271,6 +1334,39 @@ class ModuleLoader:
 
         self._sub_event_tasks.append(asyncio.create_task(_runner()))
 
+    def _live_handler(self, module_id: str, attr_name: str) -> Callable[..., Any] | None:
+        """The *currently loaded* bound method for `module_id.attr_name`.
+
+        Routes and job handlers are registered once, but a module can be
+        reloaded underneath them (hot reload in dev, module upgrade) - and
+        FastAPI cannot unbind a route, so `load_one` mounts a second one and
+        Starlette keeps matching the first. Closing over the bound method
+        therefore pinned callers to the *original* instance forever. For a
+        subprocess module that instance is a stub over a `SubprocessBridge`
+        whose worker `unload_one` has already stopped, so every call died
+        writing to a dead socket - surfacing as a raw
+        `unable to perform operation on <UnixTransport closed=True ...>;
+        the handler is closed` instead of anything actionable.
+
+        Resolving per call means a reload swaps the implementation. `None` =
+        the module is gone (unloaded) or no longer declares that handler; the
+        caller turns that into a 404 / a failed job with a clear message.
+        """
+        loaded = self.loaded.get(module_id)
+        if loaded is None:
+            return None
+        handler = getattr(loaded.instance, attr_name, None)
+        return handler if callable(handler) else None
+
+    def _require_live_handler(self, module_id: str, attr_name: str) -> Callable[..., Any]:
+        handler = self._live_handler(module_id, attr_name)
+        if handler is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Module {module_id!r} is not loaded (or no longer has {attr_name!r}).",
+            )
+        return handler
+
     async def _invoke_handler(
         self,
         bound_method: Callable[..., Any],
@@ -1282,11 +1378,79 @@ class ModuleLoader:
         # once the handler is done so per-call scratch space doesn't pile up
         # (§5.5 "workdir: scratch space, auto-cleaned on completion").
         try:
+            # A cancellable job (`ctx._ff_job_id` set) on a module that opted into
+            # `execution: worker` runs in a throwaway killable child process, so a
+            # native CPU loop is hard-cancellable - the `to_thread` path below
+            # cannot be (a Python thread can't be killed). @route / non-job
+            # handlers and `thread` modules keep the in-process path.
+            job_id = getattr(ctx, "_ff_job_id", None)
+            if job_id is not None and self._uses_worker_execution(ctx.module_id):
+                meta = self._offload_meta(ctx.module_id)
+                if meta is not None:
+                    folder, site_packages, _module_file = meta
+                    worker = JobWorker(
+                        module_id=ctx.module_id,
+                        folder=folder,
+                        site_packages=site_packages,
+                        job_id=job_id,
+                    )
+                    return await worker.run(bound_method.__name__, ctx, args, kwargs)
             if inspect.iscoroutinefunction(bound_method):
                 return await bound_method(ctx, *args, **kwargs)
             return await asyncio.to_thread(bound_method, ctx, *args, **kwargs)
         finally:
             shutil.rmtree(ctx.workdir, ignore_errors=True)
+
+    async def run_dataset_route(
+        self,
+        module_id: str,
+        route: str,
+        log_id: str,
+        user_id: str,
+        *,
+        method: str = "get",
+        filter_override: list[dict[str, Any]] | None = None,
+        params: dict[str, Any] | None = None,
+        restrict_event_log: bool = False,
+    ) -> Any:
+        """Invoke a loaded module's ``@route`` handler programmatically.
+
+        The public entry the dataset layer uses to produce a module's data
+        without an HTTP round-trip - it reuses the module's result cache and the
+        ephemeral filter exactly like a real request. Returns the raw handler
+        result (the dataset layer normalizes it into an envelope).
+        ``restrict_event_log=True`` wires the AI/MCP data wall: the handler sees
+        its result cache but every raw event-log accessor raises."""
+        loaded = self.loaded.get(module_id)
+        if loaded is None:
+            raise ValueError(f"Module {module_id!r} is not loaded.")
+        inst = loaded.instance
+        handler: Callable[..., Any] | None = None
+        for name in dir(inst):
+            spec = get_route_spec(getattr(type(inst), name, None))
+            if spec is not None and spec.path == route and spec.method.lower() == method.lower():
+                handler = getattr(inst, name)
+                break
+        if handler is None:
+            raise ValueError(f"No {method.upper()} route {route!r} on module {module_id!r}.")
+        ctx = await self._make_context(
+            module_id,
+            log_id,
+            user_id,
+            filter_override=filter_override,
+            restrict_event_log=restrict_event_log,
+        )
+        return await self._invoke_handler(handler, ctx, **(params or {}))
+
+    def _uses_worker_execution(self, module_id: str) -> bool:
+        """Whether *module_id* is an in-process module that opted into per-job
+        worker execution (`dependencies.python.execution: worker`) - so its jobs
+        run in a killable child rather than the uncancellable thread pool."""
+        lm = self.loaded.get(module_id)
+        if lm is None:
+            return False
+        py = lm.manifest.dependencies.python
+        return py.isolation == "in_process" and getattr(py, "execution", "thread") == "worker"
 
     async def _user_owns(self, user_id: str, module_id: str) -> bool:
         """Whether *user_id* has *module_id* installed.
@@ -1341,6 +1505,7 @@ class ModuleLoader:
         cancellation: Any | None = None,
         filter_override: list[dict[str, Any]] | None = None,
         job_id: str | None = None,
+        restrict_event_log: bool = False,
     ) -> ModuleContext:
         # workdir is per-invocation; for v1 we use a temp dir scoped to the
         # process. A future enhancement: clean up after the call returns
@@ -1361,30 +1526,38 @@ class ModuleLoader:
         try:
             sm = get_sessionmaker()
             async with sm() as session:
-                # Admin-controlled module config (mate.api.policy) overrides the
-                # per-user ModuleConfig with one shared value for every user.
-                from mate.api.policy import SCOPE_MODULE, SCOPE_SETTING, resolve
+                # Per-user config is always the base; each admin-locked settings
+                # card (mate.api.modules.cards) overlays only the config_json
+                # slice it owns, so locking one card never drops another card's
+                # per-user value (the old whole-module lock replaced the entire
+                # blob and silently dropped the AI/model selection). A locked
+                # model card additionally gets the __model_admin_locked__
+                # sentinel so the module's /models route renders read-only. Each
+                # card resolves defensively inside resolve_card_overlays, so a
+                # single failed lookup degrades to the per-user value.
+                row = await session.get(ModuleConfig, (user_id, module_id))
+                if row is not None and row.config_json:
+                    cfg_json = dict(row.config_json)
+                loaded_mod = self.loaded.get(module_id)
+                if loaded_mod is not None:
+                    from mate.api.modules.cards import (
+                        AI_LOCK_SENTINEL,
+                        CARD_AI,
+                        CARD_MODEL,
+                        MODEL_LOCK_SENTINEL,
+                        resolve_card_overlays,
+                    )
 
-                admin_cfg, controlled = await resolve(session, SCOPE_MODULE, module_id, user_id)
-                if controlled:
-                    if isinstance(admin_cfg, dict):
-                        cfg_json = dict(admin_cfg)
-                else:
-                    row = await session.get(ModuleConfig, (user_id, module_id))
-                    if row is not None and row.config_json:
-                        cfg_json = dict(row.config_json)
-                # A module exposing a model_store (e.g. cv4cdd) can have its model
-                # *selection* pinned platform-wide via the `<module_id>.model`
-                # setting: when admin-controlled it overrides the per-user `model`
-                # config key for everyone, while the rest of the config (windows,
-                # thresholds) stays per-user. The sentinel lets the module's
-                # /models route render a read-only "administrator-controlled" state.
-                model_admin, model_locked = await resolve(
-                    session, SCOPE_SETTING, f"{module_id}.model", user_id
-                )
-                if model_locked and isinstance(model_admin, str) and model_admin:
-                    cfg_json["model"] = model_admin
-                    cfg_json["__model_admin_locked__"] = True
+                    cfg_json, controlled_cards = await resolve_card_overlays(
+                        session, loaded_mod.manifest, cfg_json, user_id
+                    )
+                    if controlled_cards.get(CARD_MODEL):
+                        cfg_json[MODEL_LOCK_SENTINEL] = True
+                    # AI card locked → inject the ai sentinel so a module's
+                    # action routes (e.g. CDE's Pinecone rebuild, which uses the
+                    # admin-pinned embedding dimension) can refuse.
+                    if controlled_cards.get(CARD_AI):
+                        cfg_json[AI_LOCK_SENTINEL] = True
                 # Modules this user has installed - scopes ctx.registry so
                 # cross-module RPC can only reach the user's own modules.
                 owned_ids = await user_module_ids(session, user_id)
@@ -1428,7 +1601,15 @@ class ModuleLoader:
         # tenant-isolation invariant in one place - we refuse any log the caller
         # doesn't own. The returned view mirrors the primary one: same user, the
         # target log's own committed Events-tab filter.
-        async def _open_event_log(other_log_id: str) -> EventLogAccess:
+        #
+        # An explicit `filters` list REPLACES that committed filter for this
+        # view only - the same precedence the dashboard's ephemeral filter has
+        # (`filter_override` above), and the mechanism behind an A/B comparison
+        # of two *differently filtered* views of the same log. `[]` means "raw
+        # log, ignore the committed filter"; `None` keeps the committed one.
+        async def _open_event_log(
+            other_log_id: str, filters: list[dict[str, Any]] | None = None
+        ) -> EventLogAccess:
             sm_ = get_sessionmaker()
             async with sm_() as session:
                 other = await session.get(EventLog, other_log_id)
@@ -1441,29 +1622,47 @@ class ModuleLoader:
                     f"Event log {other_log_id} is object-centric; "
                     "open_event_log only serves case-centric logs."
                 )
-            return EventLogAccess(other_log_id, user_id, other.active_filter or None)
+            applied = (other.active_filter or None) if filters is None else (filters or None)
+            return EventLogAccess(other_log_id, user_id, applied)
 
         # Object-centric (OCEL) logs bind `object_log` and leave `event_log`
         # unbound; case-centric logs do the opposite. A module only ever runs
         # against the model it declares (availability gating), so it reaches for
         # exactly one of the two.
         object_centric = bool(log_id) and log_model == "object_centric"
+        # AI/assistant callers pass restrict_event_log=True: the module keeps its
+        # cache (its own precomputed outputs) but every raw event-log accessor
+        # raises, so a guidance_payload() cannot exfiltrate XES/parquet rows into
+        # an LLM prompt - no matter what it tries to read. object_log is denied the
+        # same way for object-centric logs.
+        if restrict_event_log:
+            event_log_access: Any = _RestrictedEventLog()
+            object_log_access: Any = None
+        elif object_centric:
+            event_log_access = _UnboundEventLog()
+            object_log_access = ObjectCentricLogAccess(log_id, storage_user_id)
+        elif log_id:
+            event_log_access = EventLogAccess(log_id, storage_user_id, active_filter)
+            object_log_access = None
+        else:
+            event_log_access = _UnboundEventLog()
+            object_log_access = None
         return ModuleContext(
             log_id=log_id,
             module_id=module_id,
             user_id=user_id,
-            event_log=(
-                EventLogAccess(log_id, storage_user_id, active_filter)
-                if log_id and not object_centric
-                else _UnboundEventLog()
-            ),  # type: ignore[arg-type]
-            object_log=(
-                ObjectCentricLogAccess(log_id, storage_user_id) if object_centric else None
-            ),  # type: ignore[arg-type]
+            event_log=event_log_access,  # type: ignore[arg-type]
+            object_log=object_log_access,  # type: ignore[arg-type]
             bus=_SdkBusAdapter(self.bus, user_id, log_id),  # type: ignore[arg-type]
             registry=_UserScopedRegistry(self.registry, frozenset(owned_ids)),  # type: ignore[arg-type]
             cache=(  # type: ignore[arg-type]
-                ResultCache(log_id, module_id, user_id, variant=cache_variant)
+                # storage_user_id (not user_id): a shared dashboard's viewer must
+                # land on the *owner's* result cache, same as event_log/object_log
+                # above - the owner's precompute already wrote there. Keying on the
+                # viewer's own id instead pointed at an always-empty directory, so
+                # every card on a shared dashboard read as uncomputed for anyone
+                # but the owner.
+                ResultCache(log_id, module_id, storage_user_id, variant=cache_variant)
                 if log_id
                 else _UnboundCache()
             ),
@@ -1503,6 +1702,59 @@ class _UnboundEventLog:
 
     async def duckdb_fetch(self, *_, **__):
         raise RuntimeError("This handler isn't scoped to a log_id.")
+
+
+class _RestrictedEventLog:
+    """Event-log stand-in for AI/assistant contexts: every raw-data accessor
+    raises. MATE AI may only see module *outputs* (``ctx.cache``) and curated
+    aggregate metadata - never the underlying XES/parquet rows. Wired by
+    ``_make_context(..., restrict_event_log=True)`` so a module's
+    ``guidance_payload`` cannot leak raw events into an LLM prompt.
+    """
+
+    _MSG = (
+        "Event-log data is not accessible here: MATE AI only receives module "
+        "outputs and aggregate metadata, never raw event rows."
+    )
+
+    async def __aenter__(self):  # type: ignore[no-untyped-def]
+        raise PermissionError(self._MSG)
+
+    async def __aexit__(self, *exc):  # type: ignore[no-untyped-def]
+        return None
+
+    async def pandas(self):  # type: ignore[no-untyped-def]
+        raise PermissionError(self._MSG)
+
+    async def polars(self):  # type: ignore[no-untyped-def]
+        raise PermissionError(self._MSG)
+
+    async def pm4py(self):  # type: ignore[no-untyped-def]
+        raise PermissionError(self._MSG)
+
+    async def duckdb_fetch(self, *_, **__):  # type: ignore[no-untyped-def]
+        raise PermissionError(self._MSG)
+
+    async def materialize_parquet(self):  # type: ignore[no-untyped-def]
+        raise PermissionError(self._MSG)
+
+    @property
+    def events_path(self):  # type: ignore[no-untyped-def]
+        raise PermissionError(self._MSG)
+
+    @property
+    def cases_path(self):  # type: ignore[no-untyped-def]
+        raise PermissionError(self._MSG)
+
+    @property
+    def active_filter(self):  # type: ignore[no-untyped-def]
+        raise PermissionError(self._MSG)
+
+    def __getattr__(self, name: str):  # type: ignore[no-untyped-def]
+        # Catch-all so any other / future reader a module reaches for is denied
+        # too (dunders skip __getattr__, so context-manager use still hits the
+        # explicit __aenter__ above).
+        raise PermissionError(self._MSG)
 
 
 class _UnboundCache:

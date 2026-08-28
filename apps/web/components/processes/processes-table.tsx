@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useProgressRouter } from "@/lib/use-progress-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { prefetchEventLog } from "@/lib/client-prefetch";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   AlertTriangle,
@@ -25,9 +25,11 @@ import {
   DndContext,
   DragOverlay,
   PointerSensor,
+  pointerWithin,
   useDroppable,
   useSensor,
   useSensors,
+  type CollisionDetection,
   type DragEndEvent,
   type DragOverEvent,
   type DragStartEvent,
@@ -100,6 +102,7 @@ import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 
 import { FormatBadge } from "./format-badge";
+import { precomputeProgressForLog, useJobsStore } from "@/lib/stores/jobs";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -249,6 +252,43 @@ export function ProcessesTable({ rows }: ProcessesTableProps) {
     return m;
   }, [tree]);
 
+  // A folder row's sortable and its "into:folder:" droppable share one DOM
+  // node, so their rects are identical – plain closestCenter ties and always
+  // resolves to whichever registered first (the sortable), meaning into-drops
+  // would never fire. Resolve explicitly: pointer inside an into-zone wins
+  // (whole row for logs, middle band for folders so their top/bottom quarters
+  // still reorder), otherwise fall back to closestCenter over row ids only.
+  const collisionDetection = useCallback<CollisionDetection>(
+    (args) => {
+      const activeIdStr = String(args.active.id);
+      const activeNode = byId.get(activeIdStr as NodeId);
+      const activeIsLog = activeIdStr.startsWith("log:");
+
+      for (const c of pointerWithin(args)) {
+        const id = String(c.id);
+        if (id === "into:root") return [c];
+        if (!id.startsWith("into:folder:")) continue;
+        const targetId = id.slice("into:folder:".length);
+        // Dropping a folder into itself/its own subtree would create a cycle.
+        if (activeNode && isSelfOrDescendantFolder(activeNode, targetId)) continue;
+        if (activeIsLog) return [c];
+        const rect = args.droppableRects.get(c.id);
+        const y = args.pointerCoordinates?.y;
+        if (rect && y != null) {
+          const band = rect.height / 4;
+          if (y >= rect.top + band && y <= rect.bottom - band) return [c];
+        }
+      }
+      return closestCenter({
+        ...args,
+        droppableContainers: args.droppableContainers.filter(
+          (d) => !String(d.id).startsWith("into:"),
+        ),
+      });
+    },
+    [byId],
+  );
+
   const onDragStart = (event: DragStartEvent) => {
     setActiveId(event.active.id as NodeId);
   };
@@ -282,16 +322,23 @@ export function ProcessesTable({ rows }: ProcessesTableProps) {
     // Case A: dropped on a folder's body → move into that folder (at end).
     if (overIdStr.startsWith("into:folder:")) {
       const targetFolderId = overIdStr.slice("into:folder:".length);
-      if (activeNode.kind === "folder" && activeNode.id === targetFolderId) return;
+      if (isSelfOrDescendantFolder(activeNode, targetFolderId)) return;
       void moveIntoFolder(activeNode, targetFolderId);
       return;
     }
 
     // Case B: dropped on a sibling row → reorder within that row's parent.
+    // Cross-kind (log on a folder row's edge, folder on a log row) can't be
+    // an adjacent reorder – land it in the over row's parent instead of
+    // silently doing nothing.
     if (overIdStr.startsWith("folder:") || overIdStr.startsWith("log:")) {
       const overNode = byId.get(overIdStr as NodeId);
       if (!overNode) return;
-      void moveAdjacent(activeNode, overNode);
+      if (activeNode.kind !== overNode.kind) {
+        void moveIntoFolder(activeNode, overNode.parentId);
+      } else {
+        void moveAdjacent(activeNode, overNode);
+      }
       return;
     }
 
@@ -303,6 +350,7 @@ export function ProcessesTable({ rows }: ProcessesTableProps) {
 
   /** Move a node into the end of `targetFolderId` (null = root). */
   const moveIntoFolder = async (node: TreeNode, targetFolderId: string | null) => {
+    if (targetFolderId !== null && isSelfOrDescendantFolder(node, targetFolderId)) return;
     // Determine current siblings at the destination (same kind), then append.
     const siblings = collectSiblings(tree, targetFolderId, node.kind).filter(
       (n) => !(n.kind === node.kind && n.id === node.id),
@@ -342,10 +390,15 @@ export function ProcessesTable({ rows }: ProcessesTableProps) {
     const overIdx = siblings.findIndex((n) => n.id === over.id);
     if (overIdx === -1) return;
 
-    // Insert active at overIdx (matches the "drop before" intent of dnd-kit's
-    // closestCenter when the item lands just above `over`).
+    // Match dnd-kit's sortable preview (arrayMove semantics): dragging down
+    // lands the item after `over`, dragging up lands it before. Direction is
+    // read off the rendered flat order.
+    const fromFlat = sortableIds.indexOf(nodeId(active));
+    const toFlat = sortableIds.indexOf(nodeId(over));
+    const insertIdx = fromFlat !== -1 && fromFlat < toFlat ? overIdx + 1 : overIdx;
+
     const reordered = [...siblings];
-    reordered.splice(overIdx, 0, active);
+    reordered.splice(insertIdx, 0, active);
     const items: ReorderItem[] = reordered.map((n, i) => ({
       kind: n.kind,
       id: n.id,
@@ -373,7 +426,7 @@ export function ProcessesTable({ rows }: ProcessesTableProps) {
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={closestCenter}
+      collisionDetection={collisionDetection}
       onDragStart={onDragStart}
       onDragOver={onDragOver}
       onDragEnd={onDragEnd}
@@ -402,11 +455,21 @@ export function ProcessesTable({ rows }: ProcessesTableProps) {
         </div>
       </SortableContext>
 
-      <DragOverlay>
+      {/* No drop animation: rows are moved optimistically on mouse-up, so the
+          default overlay fly-back would animate toward a stale rect. */}
+      <DragOverlay dropAnimation={null}>
         {activeNode ? <DragPreview node={activeNode} /> : null}
       </DragOverlay>
     </DndContext>
   );
+}
+
+/** True when `targetFolderId` is `node` itself or anywhere in its subtree –
+ *  moving there would detach the branch into a cycle. */
+function isSelfOrDescendantFolder(node: TreeNode, targetFolderId: string): boolean {
+  if (node.kind !== "folder") return false;
+  if (node.id === targetFolderId) return true;
+  return node.children.some((c) => isSelfOrDescendantFolder(c, targetFolderId));
 }
 
 function collectSiblings(
@@ -430,6 +493,31 @@ function collectSiblings(
 }
 
 // ── Header ────────────────────────────────────────────────────────────────────
+
+/**
+ * "Preparing modules… 3/17" under a `processing` row.
+ *
+ * Its own component so only this subtree re-renders on job ticks - subscribing
+ * every row in the table to the jobs map would repaint the whole list several
+ * times a second during an import. Falls back to the indeterminate bar when the
+ * store has no import job for this log (e.g. a page opened after the fact).
+ */
+function PrecomputeCaption({ logId }: { logId: string }) {
+  const byId = useJobsStore((s) => s.byId);
+  const progress = useMemo(() => precomputeProgressForLog(byId, logId), [byId, logId]);
+
+  return (
+    <div className="mt-1 max-w-xs">
+      <Progress
+        value={progress?.pct}
+        className={cn("h-1", progress === null && "animate-pulse")}
+      />
+      <div className="mt-1 text-xs tabular-nums text-muted-foreground">
+        {progress ? `Preparing modules… ${progress.done}/${progress.total}` : "Preparing modules…"}
+      </div>
+    </div>
+  );
+}
 
 function HeaderRow() {
   return (
@@ -826,6 +914,7 @@ function LogRow({
             style={style}
             {...sortable.attributes}
             {...sortable.listeners}
+            data-log-id={row.id}
             className={cn(
               "grid grid-cols-[1fr_70px_90px_80px_180px_120px_60px_40px] gap-2 items-center px-4 py-2 text-sm hover:bg-accent/50",
               ready && "cursor-pointer",
@@ -843,15 +932,16 @@ function LogRow({
           >
             <div className="min-w-0" style={{ paddingLeft: depth * 16 + 24 }}>
               <div className="truncate font-medium">{row.name}</div>
-              {busy && (
-                <div className="mt-1 max-w-xs">
-                  <Progress value={undefined} className="h-1" />
-                  {processing && (
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      Preparing modules…
-                    </div>
-                  )}
-                </div>
+              {processing ? (
+                <PrecomputeCaption logId={row.id} />
+              ) : (
+                importing && (
+                  <div className="mt-1 max-w-xs">
+                    {/* Indeterminate: the bar has to pulse or it reads as a stalled 0%. */}
+                    <Progress value={undefined} className="h-1 animate-pulse" />
+                    <div className="mt-1 text-xs text-muted-foreground">Reading the file…</div>
+                  </div>
+                )
               )}
               {failed && (
                 <HoverCard>

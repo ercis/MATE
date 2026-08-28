@@ -168,13 +168,13 @@ export function useRunIngest(logId: string) {
 }
 
 export function useRunExplain(logId: string) {
-  const qc = useQueryClient();
+  // Returns `{ job_id }` the moment the pipeline job is *queued*; the caller
+  // follows the job to completion (see panel/index.tsx) and invalidates
+  // `cdeKeys.explanations` then — invalidating here would refetch the stale
+  // pre-run cache.
   return useMutation<{ job_id: string }, Error, { drift_key: string }>({
     mutationFn: (body) =>
       api(url("/explain", logId), { method: "POST", json: body }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: cdeKeys.explanations(logId) });
-    },
   });
 }
 

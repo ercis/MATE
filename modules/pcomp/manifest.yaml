@@ -1,12 +1,35 @@
 id: pcomp
 name: Pcomp
-version: 0.2.0
+version: 1.0.0
 category: comparison
 description: >-
   Tests whether two event logs differ in a statistically meaningful way,
   comparing them with Earth Mover's Distance via a permutation or bootstrap test
-  and reporting a p-value.
-author: C. Pitsch
+  and reporting a p-value. Based on Pitsch et al., "Hypothesis Testing for
+  Processes" (ICPM 2025).
+about: >-
+  Answer "are these two processes really different?" with statistics instead of
+  eyeballing: this module compares two event logs with Earth Mover's Distance
+  and runs a permutation or bootstrap test that yields a p-value. Use it to
+  check whether a department, time period, or cohort behaves significantly
+  differently - including timing behaviour, not just activity order.
+source:
+  - title: Hypothesis testing for processes
+    fullCitation: >-
+      C. Pitsch, T. Brockhoff, J. N. Adams, S. J. J. Leemans, L. A. Celi, and
+      W. M. P. van der Aalst, "Hypothesis testing for processes," in Proc. ICPM,
+      Montevideo, Uruguay, 2025, pp. 1-8
+    url: https://doi.org/10.1109/ICPM66919.2025.11220677
+  - title: "PM4Py: A process mining library for Python"
+    fullCitation: >-
+      A. Berti, S. van Zelst, and D. Schuster, "PM4Py: A process mining library
+      for Python," Softw. Impacts, vol. 17, 100556, 2023
+    url: https://doi.org/10.1016/j.simpa.2023.100556
+artifacts:
+  - name: pcomp reference implementation
+    url: https://github.com/cpitsch/pcomp
+  - name: pm4py
+    url: https://github.com/process-intelligence-solutions/pm4py
 license: MIT
 isConfidentialSafe: true
 
@@ -42,6 +65,7 @@ dependencies:
 
 frontend:
   panel: ./panel/index.tsx
+  log_filter: false
 
 permissions:
   - read:event_log

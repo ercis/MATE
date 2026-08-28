@@ -22,7 +22,7 @@
  * backoff (capped at 8s) so a transient blip never breaks the pipeline.
  */
 
-import { rawFetch } from "@/lib/api";
+import { logoutToLogin, rawFetch } from "@/lib/api";
 import type { BusEnvelope } from "@/lib/api-types";
 
 type Listener<T> = (env: BusEnvelope<T>) => void;
@@ -81,21 +81,13 @@ function subscribeSse<T>(
     }
 
     if (res.status === 401) {
-      // Auth failed – clear the session and bounce to /login rather than
-      // reconnecting in a loop. We go through /login (not a hardcoded
-      // signIn("keycloak")) so this works for every provider: in demo mode
-      // /login auto-signs the demo user back in, and forcing Keycloak here
-      // would 500 the page when Keycloak isn't reachable. Mirrors lib/api.ts.
-      if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
-        const cb = `${window.location.pathname}${window.location.search}`;
-        const loginUrl = `/login?callbackUrl=${encodeURIComponent(cb)}`;
-        try {
-          const { signOut } = await import("next-auth/react");
-          await signOut({ redirectTo: loginUrl });
-        } catch {
-          window.location.assign(loginUrl);
-        }
-      }
+      // Auth failed – end the session and bounce to /login rather than
+      // reconnecting in a loop. Shares lib/api's logoutToLogin (single-flight,
+      // no-op on /login), which navigates through the server-side /logout
+      // route: a fetch-based signOut() dies under the same interception
+      // (content blocker / stale service worker) that tends to cause this
+      // state, leaving the cookie alive and /login bouncing straight back.
+      await logoutToLogin();
       return;
     }
     if (opts.stopOn?.includes(res.status)) return;

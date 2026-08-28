@@ -1,0 +1,77 @@
+id: performance_java
+name: Performance Metrics (Java)
+version: 1.0.0
+category: foundation
+description: >-
+  Timing metrics straight from the event log: cycle time, throughput, the
+  activities cases wait in longest, and the slowest hand-offs.
+about: >-
+  Measures where a process spends its time. It reports headline KPIs (cases,
+  variants, average/median/P90 cycle time, throughput per day), ranks every
+  activity by the time cases dwell in it, and ranks every directly-follows
+  hand-off by the wait between the two steps - so a bottleneck shows up both as
+  the step it sits in and as the transition it delays. Also the platform's
+  reference module for the JVM runtime: its backend is a self-contained Java jar
+  speaking the worker protocol (modules/PROTOCOL.md), with no Python code at all.
+license: MIT
+
+# The whole module backend is one fat jar (built from
+# packages/module-sdk-jvm/examples/performance-metrics via `make sdk-jvm`). The
+# platform only needs a JRE (bundled in the api image); there is no server-side
+# dependency resolution.
+runtime:
+  kind: jvm
+  jar: dist/performance-metrics-all.jar
+  requires-java: 17
+  jvm-args: ["-Xmx512m"]
+
+requirements:
+  event_log:
+    log_model: case_centric
+    required_columns: [case_id, activity, timestamp]
+    # end_timestamp splits an event's own duration out of the dwell time and
+    # adds the processing/waiting KPIs; resource adds the actor count. Both are
+    # read only when the log actually has them.
+    optional_columns: [end_timestamp, resource]
+    min_events: 10
+
+provides: []
+consumes:
+  - log.imported
+
+keywords:
+  [performance, cycle time, throughput, bottleneck, waiting time, handoff, java, jvm]
+
+frontend:
+  # The panel is plain TSX like any other module's - the platform's frontend
+  # never knew the backend is a jar. It reads the same three routes the
+  # datasets below do, so the log filter bar above it applies unchanged.
+  panel: ./panel/index.tsx
+
+# Dashboard-side outputs: typed data rendered by the platform's generic
+# visualizations, no widget code of our own.
+datasets:
+  - id: kpis
+    title: Performance KPIs (Java)
+    description: Cases, variants, cycle-time percentiles and throughput.
+    icon: Gauge
+    shape: kpi
+    route: /kpis
+  - id: activity-performance
+    title: Activity performance
+    description: Activities ranked by the total time cases dwell in them.
+    icon: Hourglass
+    shape: table
+    route: /activities
+  - id: handoff-performance
+    title: Hand-off performance
+    description: Directly-follows transitions ranked by the wait between steps.
+    icon: ArrowRightLeft
+    shape: table
+    route: /transitions
+
+permissions:
+  - read:event_log
+  - write:module_results
+
+is_confidential_safe: true

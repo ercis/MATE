@@ -89,6 +89,19 @@ def _record_fields(record: dict[str, Any]) -> dict[str, str]:
     return out
 
 
+def sample_json_events(
+    path: Path, *, max_events: int = 200
+) -> tuple[list[dict[str, str]], str | None]:
+    """Flatten the first ``max_events`` records into ``(records, event_path)``.
+
+    Shared by :func:`probe_json` and the import wizard's probe, which needs the
+    raw sample (not just per-field coverage) for the column-role heuristics.
+    """
+    doc = _load(path)
+    records, resolved = _locate_events(doc, None)
+    return [_record_fields(r) for r in records[:max_events]], resolved
+
+
 def probe_json(path: Path, *, max_events: int = 200) -> dict[str, Any]:
     """Describe a JSON file for the mapping wizard.
 
@@ -99,8 +112,7 @@ def probe_json(path: Path, *, max_events: int = 200) -> dict[str, Any]:
     if looks_like_ocel_json(path):
         return {"format_hint": "ocel", "event_path": None, "events_sampled": 0, "fields": []}
 
-    doc = _load(path)
-    records, resolved = _locate_events(doc, None)
+    records, resolved = sample_json_events(path, max_events=max_events)
     if not records:
         return {
             "format_hint": "generic",
@@ -111,15 +123,13 @@ def probe_json(path: Path, *, max_events: int = 200) -> dict[str, Any]:
 
     samples: dict[str, list[str]] = {}
     presence: dict[str, int] = {}
-    seen = 0
-    for record in records[:max_events]:
-        fields = _record_fields(record)
+    for fields in records:
         for name, value in fields.items():
             presence[name] = presence.get(name, 0) + 1
             bucket = samples.setdefault(name, [])
             if len(bucket) < 3 and value not in bucket:
                 bucket.append(value)
-        seen += 1
+    seen = len(records)
 
     fields_summary = [
         {"name": name, "coverage": round(count / max(1, seen), 3), "samples": samples.get(name, [])}
@@ -248,4 +258,4 @@ def parse_json(
     return rows, detected, effective
 
 
-__all__ = ["autodetect_mapping", "parse_json", "probe_json"]
+__all__ = ["autodetect_mapping", "parse_json", "probe_json", "sample_json_events"]

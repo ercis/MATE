@@ -5,7 +5,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { api } from "@/lib/api";
+import { useCardScope } from "@/lib/dashboards/card-scope";
 import {
+  panelScope,
   selectDfg,
   selectHeuristics,
   selectNodePositions,
@@ -24,6 +26,8 @@ import {
 interface DiscoverySettingsContextValue {
   logId: string;
   moduleId: string;
+  /** Which settings bucket these views read and write — see `useCardScope`. */
+  scope: string;
 }
 
 const DiscoverySettingsContext = createContext<DiscoverySettingsContextValue | null>(null);
@@ -31,13 +35,30 @@ const DiscoverySettingsContext = createContext<DiscoverySettingsContextValue | n
 export function DiscoverySettingsProvider({
   logId,
   moduleId,
+  scope,
   children,
 }: {
   logId: string;
   moduleId: string;
+  /** Override the settings bucket. Rarely needed: on a dashboard the card
+   * supplies it through context automatically. */
+  scope?: string;
   children: ReactNode;
 }) {
-  const value = useMemo(() => ({ logId, moduleId }), [logId, moduleId]);
+  // Resolution order: an explicit prop, then the dashboard card this is
+  // rendered inside (if any), then the module's panel scope.
+  //
+  // This is what lets a card differ from the panel. `ProcessMap` mounts this
+  // provider exactly as the panel does, and used to therefore share the
+  // panel's settings with no way to change them from the card; now the card
+  // context silently redirects it to its own bucket. The panel passes no
+  // `scope` and there is no card context there, so it behaves exactly as
+  // before.
+  const cardScope = useCardScope();
+  const value = useMemo(
+    () => ({ logId, moduleId, scope: scope ?? cardScope ?? panelScope(moduleId) }),
+    [logId, moduleId, scope, cardScope],
+  );
   return <DiscoverySettingsContext.Provider value={value}>{children}</DiscoverySettingsContext.Provider>;
 }
 
@@ -64,56 +85,56 @@ export function useResetGeneralSettings() {
 // -- Per-viz settings --------------------------------------------------------
 
 export function useDfgSettings(): [DfgRenderSettings, (patch: Partial<DfgRenderSettings>) => void] {
-  const { logId, moduleId } = useScope();
-  const settings = useVizSettings((s) => selectDfg(s, logId, moduleId));
+  const { logId, scope } = useScope();
+  const settings = useVizSettings((s) => selectDfg(s, logId, scope));
   const set = useVizSettings((s) => s.setDfg);
-  return [settings, (patch) => set(logId, moduleId, patch)];
+  return [settings, (patch) => set(logId, scope, patch)];
 }
 
 export function usePetriSettings(): [PetriRenderSettings, (patch: Partial<PetriRenderSettings>) => void] {
-  const { logId, moduleId } = useScope();
-  const settings = useVizSettings((s) => selectPetri(s, logId, moduleId));
+  const { logId, scope } = useScope();
+  const settings = useVizSettings((s) => selectPetri(s, logId, scope));
   const set = useVizSettings((s) => s.setPetri);
-  return [settings, (patch) => set(logId, moduleId, patch)];
+  return [settings, (patch) => set(logId, scope, patch)];
 }
 
 export function useProcessTreeSettings(): [
   ProcessTreeRenderSettings,
   (patch: Partial<ProcessTreeRenderSettings>) => void,
 ] {
-  const { logId, moduleId } = useScope();
-  const settings = useVizSettings((s) => selectProcessTree(s, logId, moduleId));
+  const { logId, scope } = useScope();
+  const settings = useVizSettings((s) => selectProcessTree(s, logId, scope));
   const set = useVizSettings((s) => s.setProcessTree);
-  return [settings, (patch) => set(logId, moduleId, patch)];
+  return [settings, (patch) => set(logId, scope, patch)];
 }
 
 export function useHeuristicsRenderSettings(): [
   HeuristicsRenderSettings,
   (patch: Partial<HeuristicsRenderSettings>) => void,
 ] {
-  const { logId, moduleId } = useScope();
-  const settings = useVizSettings((s) => selectHeuristics(s, logId, moduleId));
+  const { logId, scope } = useScope();
+  const settings = useVizSettings((s) => selectHeuristics(s, logId, scope));
   const set = useVizSettings((s) => s.setHeuristics);
-  return [settings, (patch) => set(logId, moduleId, patch)];
+  return [settings, (patch) => set(logId, scope, patch)];
 }
 
 // -- Node positions (for draggable canvas state) ----------------------------
 
 export function useNodePositions(viz: VizKey): NodePositions {
-  const { logId, moduleId } = useScope();
-  return useVizSettings((s) => selectNodePositions(s, logId, moduleId, viz));
+  const { logId, scope } = useScope();
+  return useVizSettings((s) => selectNodePositions(s, logId, scope, viz));
 }
 
 export function usePersistNodePositions(viz: VizKey) {
-  const { logId, moduleId } = useScope();
+  const { logId, scope } = useScope();
   const setNodePositions = useVizSettings((s) => s.setNodePositions);
-  return (patch: NodePositions) => setNodePositions(logId, moduleId, viz, patch);
+  return (patch: NodePositions) => setNodePositions(logId, scope, viz, patch);
 }
 
 export function useResetPositions() {
-  const { logId, moduleId } = useScope();
+  const { logId, scope } = useScope();
   const reset = useVizSettings((s) => s.resetPositions);
-  return (viz?: VizKey) => reset(logId, moduleId, viz);
+  return (viz?: VizKey) => reset(logId, scope, viz);
 }
 
 // -- Module config (server-side) --------------------------------------------

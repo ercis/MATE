@@ -1,7 +1,7 @@
 import pandas as pd
-from mesa import Agent, Model
-from mesa.time import BaseScheduler
+from mesa import Model
 from mesa.datacollection import DataCollector
+from mesa.time import BaseScheduler
 
 from source.agents.contractor import ContractorAgent
 from source.agents.resource import ResourceAgent

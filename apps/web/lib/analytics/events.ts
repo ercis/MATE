@@ -11,6 +11,16 @@ export const EV = {
   // Auto-captured clicks
   CLICK: "click",
 
+  // UI-log capture (Abb & Rehse reference model)
+  INPUT_CHANGE: "input_change",
+  HOTKEY: "hotkey",
+  POINTER_TRACE: "pointer_trace",
+  SCROLL_DEPTH: "scroll_depth",
+  CLIPBOARD: "clipboard",
+  DRAG: "drag",
+  VIEWPORT_RESIZE: "viewport_resize",
+  VISIBILITY: "visibility",
+
   // Onboarding funnel (only fires after opt-in)
   ONBOARDING_STARTED: "onboarding_started",
   ONBOARDING_STEP_COMPLETED: "onboarding_step_completed",
@@ -24,6 +34,9 @@ export const EV = {
 
   // Process / data
   PROCESS_IMPORT_STARTED: "process_import_started",
+  // Fired when the user confirms the column mapping. `changed_roles` > 0 means
+  // the deliberate step actually caught something the resolver got wrong.
+  PROCESS_IMPORT_MAPPING_CONFIRMED: "process_import_mapping_confirmed",
   PROCESS_IMPORT_FINISHED: "process_import_finished",
   PROCESS_OPENED: "process_opened",
   PROCESS_DELETED: "process_deleted",

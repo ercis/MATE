@@ -9,31 +9,30 @@ from __future__ import annotations
 
 import json
 import math
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Annotated, Any
 
 import structlog
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import desc, func, select
 
-from mate.api.auth import CurrentUserDep, get_owned_event_log
+from mate.api.auth import CurrentUserDep
 from mate.api.db.models import EventEdit, EventLog
 from mate.api.db.session import SessionDep
-from mate.api.events import get_event_bus
 from mate.api.modules.event_editing import apply_bulk_fill, apply_cell_edit
 from mate.api.modules.event_filters import (
     FILTER_OPS,
     build_filter_where,
-    validate_filters,
 )
 from mate.api.modules.event_log_access import EventLogAccess, _quote_ident
+from mate.api.schemas.common import utc_isoformat
 from mate.api.schemas.event_log_data import (
     ActiveFilterResult,
     ActiveFilterUpdate,
     ActivitiesPage,
+    ActivityCasesPage,
+    ActivityDetail,
     ActivityRow,
-    AttributeBreakdown,
-    AttributeBreakdownEntry,
     BulkFillBody,
     BulkFillResult,
     CellPatch,
@@ -46,43 +45,23 @@ from mate.api.schemas.event_log_data import (
     EventsHeader,
     EventsPage,
     TimeBounds,
-    VariantCase,
     VariantCasesPage,
     VariantDetail,
-    VariantRow,
     VariantsPage,
 )
+
+# The aggregate/lifecycle bodies behind variants / activities / data-quality /
+# time-bounds / active-filter live in the service layer so the MCP toolset can
+# reuse them; these routes are thin adapters over it.
+from mate.api.services import log_aggregates
+from mate.api.services.log_aggregates import require_ready_case_centric as _require_ready
 
 log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/event-logs/{log_id}", tags=["event-logs"])
 
-_VARIANT_SORTS = {"case_count", "avg_duration_seconds", "last_seen", "first_seen"}
-
 
 # ── helpers ──────────────────────────────────────────────────────────────────
-
-
-async def _require_ready(log_id: str, session: SessionDep, user_id: str) -> EventLog:
-    row = await get_owned_event_log(session, log_id, user_id)
-    if row.status != "ready":
-        raise HTTPException(
-            status_code=409,
-            detail=f"Event log is {row.status!r}; data endpoints require status=ready.",
-        )
-    # Object-centric (OCEL) logs have no case_id / variants / activities - they
-    # are served exclusively by the /ocel/* endpoints. Every case-centric data
-    # endpoint funnels through here, so this one guard isolates them all.
-    if row.log_model == "object_centric":
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "This is an object-centric (OCEL) log; use the /ocel/* endpoints. "
-                "Case-centric endpoints (events/variants/activities/data-quality) "
-                "do not apply."
-            ),
-        )
-    return row
 
 
 def _parse_filter_param(raw: str | None) -> list[dict[str, Any]]:
@@ -168,13 +147,15 @@ def _parse_sort(raw: str | None, column_names: set[str]) -> str:
     return ", ".join(parts)
 
 
-def _row_dict(values: tuple, columns: list[str]) -> dict[str, Any]:
+def _row_dict(values: tuple[Any, ...], columns: list[str]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for col, val in zip(columns, values, strict=False):
         if val is None:
             out[col] = None
         elif isinstance(val, datetime):
-            out[col] = val.isoformat()
+            # Stored naive UTC (ingest normalizes) - attach the offset so the
+            # client parses the true instant instead of local wall-clock.
+            out[col] = utc_isoformat(val)
         elif isinstance(val, float) and math.isnan(val):
             out[col] = None
         else:
@@ -218,14 +199,27 @@ async def list_events(
 
         filters = _parse_filter_param(filter)
         where, where_params = _build_where(filters, col_names, q, missing_only, case_id, required)
-        order_by = _parse_sort(sort, col_names)
+        # events.parquet is written sorted by (case_id, timestamp) - both the
+        # importer and the editor sort before writing - so the default order
+        # needs no ORDER BY: DuckDB then preserves file order and pushes the
+        # LIMIT into the Parquet scan instead of top-N-sorting the whole log
+        # for every page. (File order is also what `row_index` edits address.)
+        order_by = _parse_sort(sort, col_names) if sort else None
+        order_clause = f" ORDER BY {order_by}" if order_by else ""
 
-        (total,) = (await access.duckdb_fetch(f"SELECT COUNT(*) FROM events{where}", where_params))[
-            0
-        ]
+        if where:
+            (total,) = (
+                await access.duckdb_fetch(f"SELECT COUNT(*) FROM events{where}", where_params)
+            )[0]
+        elif log_row.events_count is not None:
+            # Unfiltered total is maintained on the SQLite row (import + every
+            # edit) - skip the per-request COUNT(*) over the Parquet file.
+            total = int(log_row.events_count)
+        else:
+            (total,) = (await access.duckdb_fetch("SELECT COUNT(*) FROM events"))[0]
 
         cols, rows = await access.duckdb_fetch_with_columns(
-            f"SELECT * FROM events{where} ORDER BY {order_by} LIMIT ? OFFSET ?",
+            f"SELECT * FROM events{where}{order_clause} LIMIT ? OFFSET ?",
             [*where_params, limit, offset],
         )
         dicts = [_row_dict(r, cols) for r in rows]
@@ -299,15 +293,6 @@ async def list_column_values(
     )
 
 
-def _iso(value: Any) -> str | None:
-    """Render a DuckDB scalar (datetime or already-stringy) as ISO text."""
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value.isoformat()
-    return str(value)
-
-
 @router.get("/time-bounds", response_model=TimeBounds)
 async def get_time_bounds(
     log_id: str,
@@ -319,21 +304,8 @@ async def get_time_bounds(
     spans the full window. The canonical ``timestamp`` column is preferred;
     if it's absent or non-temporal the bounds come back ``null``.
     """
-    await _require_ready(log_id, session, user.id)
-    async with EventLogAccess(log_id, user.id) as access:
-        specs = await access.column_specs()
-        ts_spec = next(
-            (s for s in specs if s.role == "timestamp"),
-            next((s for s in specs if s.name == "timestamp"), None),
-        )
-        if ts_spec is None:
-            return TimeBounds()
-        ident = _quote_ident(ts_spec.name)
-        rows = await access.duckdb_fetch(
-            f"SELECT MIN({ident}), MAX({ident}) FROM events WHERE {ident} IS NOT NULL"
-        )
-    lo, hi = rows[0] if rows else (None, None)
-    return TimeBounds(field=ts_spec.name, min_ts=_iso(lo), max_ts=_iso(hi))
+    log_row = await _require_ready(log_id, session, user.id)
+    return await log_aggregates.time_bounds(log_row, user.id)
 
 
 @router.put("/active-filter", response_model=ActiveFilterResult)
@@ -351,39 +323,8 @@ async def put_active_filter(
     overlay - back to the full dataset - and likewise re-runs modules.
     """
     log_row = await _require_ready(log_id, session, user.id)
-
     entries = [e.model_dump() for e in payload.filter]
-    async with EventLogAccess(log_id, user.id) as access:
-        specs = await access.column_specs()
-        validate_filters(entries, {s.name for s in specs})
-
-    log_row.active_filter = entries or None
-    log_row.last_edited_at = datetime.now(UTC).replace(tzinfo=None)
-    await session.commit()
-
-    # Re-publish the import-completed signal so modules reprocess the filtered
-    # dataset - mirrors the payload the import pipeline emits (ingest/dispatch.py)
-    # plus a `reapplied` marker so handlers can distinguish a refilter from a
-    # first import if they care.
-    retriggered = False
-    try:
-        bus = get_event_bus()
-        await bus.publish(
-            "log.imported",
-            {
-                "log_id": log_id,
-                "user_id": user.id,
-                "events_count": int(log_row.events_count or 0),
-                "cases_count": int(log_row.cases_count or 0),
-                "detected_schema": log_row.detected_schema,
-                "fixed_columns": [],
-                "reapplied": True,
-            },
-        )
-        retriggered = True
-    except Exception:
-        log.exception("active_filter.republish_failed", log_id=log_id)
-
+    retriggered = await log_aggregates.commit_active_filter(session, log_row, user.id, entries)
     return ActiveFilterResult(
         active_filter=payload.filter,
         modules_retriggered=retriggered,
@@ -461,7 +402,7 @@ async def list_variants(
     min_case_count: Annotated[int | None, Query(ge=1)] = None,
 ) -> VariantsPage:
     log_row = await _require_ready(log_id, session, user.id)
-    rows, total = await _variant_rows(
+    rows, total = await log_aggregates.variant_rows(
         log_id,
         user.id,
         offset=offset,
@@ -475,101 +416,6 @@ async def list_variants(
     return VariantsPage(rows=rows, total=total, offset=offset, limit=limit)
 
 
-async def _variant_rows(
-    log_id: str,
-    user_id: str,
-    *,
-    offset: int,
-    limit: int,
-    sort: str,
-    activity_contains: str | None,
-    min_case_count: int | None,
-    total_cases: int,
-    active_filter: list[dict[str, Any]] | None = None,
-) -> tuple[list[VariantRow], int]:
-    sort_col, _, direction = sort.partition(":")
-    direction = (direction or "desc").lower()
-    if sort_col not in _VARIANT_SORTS:
-        raise HTTPException(status_code=422, detail=f"Unknown variants sort: {sort_col!r}.")
-    if direction not in {"asc", "desc"}:
-        raise HTTPException(status_code=422, detail="sort direction must be asc/desc.")
-
-    extra_where: list[str] = []
-    extra_params: list[Any] = []
-    if min_case_count is not None:
-        extra_where.append("case_count >= ?")
-        extra_params.append(min_case_count)
-
-    activity_filter = ""
-    if activity_contains:
-        activity_filter = "HAVING string_agg(activity, '→' ORDER BY timestamp) ILIKE ?"
-        extra_params.append(f"%{activity_contains}%")
-
-    sql = f"""
-        WITH per_case AS (
-            SELECT
-                case_id,
-                MIN(timestamp) AS case_start,
-                MAX(timestamp) AS case_end,
-                EXTRACT(EPOCH FROM (MAX(timestamp) - MIN(timestamp))) AS duration_s,
-                string_agg(activity, '→' ORDER BY timestamp) AS activities_str
-            FROM events
-            GROUP BY case_id
-            {activity_filter}
-        ),
-        per_variant AS (
-            SELECT
-                activities_str,
-                COUNT(*) AS case_count,
-                AVG(duration_s) AS avg_duration_seconds,
-                MEDIAN(duration_s) AS median_duration_seconds,
-                MIN(case_start) AS first_seen,
-                MAX(case_end) AS last_seen
-            FROM per_case
-            GROUP BY activities_str
-        )
-        SELECT * FROM per_variant
-        {("WHERE " + " AND ".join(extra_where)) if extra_where else ""}
-        ORDER BY {sort_col} {direction.upper()}
-    """
-    rows = await _duckdb_fetch_all(log_id, user_id, sql, extra_params, active_filter)
-    total = len(rows)
-    page = rows[offset : offset + limit]
-
-    from mate.api.ingest.aggregation import variant_id_for
-
-    out: list[VariantRow] = []
-    for i, r in enumerate(page, start=offset + 1):
-        activities_str, case_count, avg_d, med_d, first_seen, last_seen = r
-        activities = activities_str.split("→") if activities_str else []
-        case_pct = (float(case_count) / total_cases) if total_cases else 0.0
-        out.append(
-            VariantRow(
-                rank=i,
-                variant_id=variant_id_for(tuple(activities)),
-                activities=activities,
-                case_count=int(case_count),
-                case_pct=case_pct,
-                avg_duration_seconds=float(avg_d) if avg_d is not None else None,
-                median_duration_seconds=float(med_d) if med_d is not None else None,
-                first_seen=first_seen,
-                last_seen=last_seen,
-            )
-        )
-    return out, total
-
-
-async def _duckdb_fetch_all(
-    log_id: str,
-    user_id: str,
-    sql: str,
-    params: list[Any],
-    active_filter: list[dict[str, Any]] | None = None,
-) -> list[tuple]:
-    async with EventLogAccess(log_id, user_id, active_filter) as access:
-        return await access.duckdb_fetch(sql, params)
-
-
 @router.get("/variants/{variant_id}", response_model=VariantDetail)
 async def get_variant(
     log_id: str,
@@ -578,119 +424,7 @@ async def get_variant(
     user: CurrentUserDep,
 ) -> VariantDetail:
     log_row = await _require_ready(log_id, session, user.id)
-    total_cases = int(log_row.cases_count or 0)
-
-    # Pull all variants ordered by case_count desc to determine rank + activities.
-    rows, _ = await _variant_rows(
-        log_id,
-        user.id,
-        offset=0,
-        limit=10**9,
-        sort="case_count:desc",
-        activity_contains=None,
-        min_case_count=None,
-        total_cases=total_cases,
-        active_filter=log_row.active_filter,
-    )
-    target = next((v for v in rows if v.variant_id == variant_id), None)
-    if target is None:
-        raise HTTPException(status_code=404, detail="Variant not found.")
-
-    # Histogram + p90 + per-attribute breakdowns from the same DuckDB conn.
-    async with EventLogAccess(log_id, user.id, log_row.active_filter) as access:
-        # Compute case durations for this variant.
-        sep = "→"
-        durations_sql = f"""
-            WITH per_case AS (
-                SELECT case_id,
-                       string_agg(activity, '{sep}' ORDER BY timestamp) AS activities_str,
-                       EXTRACT(EPOCH FROM (MAX(timestamp) - MIN(timestamp))) AS duration_s
-                FROM events
-                GROUP BY case_id
-            )
-            SELECT duration_s FROM per_case WHERE activities_str = ?
-        """
-        d_rows = await access.duckdb_fetch(durations_sql, [sep.join(target.activities)])
-        durations = [float(r[0]) for r in d_rows if r[0] is not None]
-        durations.sort()
-        p90 = durations[int(len(durations) * 0.9)] if durations else None
-        bins, edges = _histogram(durations)
-
-        breakdowns = await _attribute_breakdowns(access, target.activities, log_row)
-
-    return VariantDetail(
-        rank=target.rank,
-        variant_id=target.variant_id,
-        activities=target.activities,
-        case_count=target.case_count,
-        case_pct=target.case_pct,
-        avg_duration_seconds=target.avg_duration_seconds,
-        median_duration_seconds=target.median_duration_seconds,
-        p90_duration_seconds=p90,
-        first_seen=target.first_seen,
-        last_seen=target.last_seen,
-        duration_histogram=bins,
-        duration_bin_edges_seconds=edges,
-        attribute_breakdowns=breakdowns,
-    )
-
-
-async def _attribute_breakdowns(
-    access: EventLogAccess,
-    activities: list[str],
-    log_row: EventLog,
-) -> list[AttributeBreakdown]:
-    overrides = log_row.column_overrides if isinstance(log_row.column_overrides, dict) else None
-    specs = await access.column_specs(overrides)
-    skip = {"case_id", "activity", "timestamp", "end_timestamp"}
-    out: list[AttributeBreakdown] = []
-    sep = "→"
-    activities_str = sep.join(activities)
-    for spec in specs:
-        if spec.name in skip:
-            continue
-        ident = _quote_ident(spec.name)
-        sql = f"""
-            WITH per_case AS (
-                SELECT case_id,
-                       string_agg(activity, '{sep}' ORDER BY timestamp) AS activities_str
-                FROM events
-                GROUP BY case_id
-            ),
-            target_cases AS (
-                SELECT case_id FROM per_case WHERE activities_str = ?
-            )
-            SELECT {ident} AS value, COUNT(*) AS n
-            FROM events
-            WHERE case_id IN (SELECT case_id FROM target_cases)
-            GROUP BY {ident}
-            ORDER BY n DESC
-            LIMIT 5
-        """
-        rows = await access.duckdb_fetch(sql, [activities_str])
-        out.append(
-            AttributeBreakdown(
-                column=spec.name,
-                label=spec.label,
-                top=[AttributeBreakdownEntry(value=r[0], count=int(r[1])) for r in rows],
-            )
-        )
-    return out
-
-
-def _histogram(values: list[float], bins: int = 12) -> tuple[list[int], list[float]]:
-    if not values:
-        return [], []
-    lo, hi = min(values), max(values)
-    if lo == hi:
-        return [len(values)], [lo, hi]
-    width = (hi - lo) / bins
-    counts = [0] * bins
-    for v in values:
-        i = min(int((v - lo) / width), bins - 1)
-        counts[i] += 1
-    edges = [lo + i * width for i in range(bins + 1)]
-    return counts, edges
+    return await log_aggregates.variant_detail(log_row, user.id, variant_id)
 
 
 @router.get("/variants/{variant_id}/cases", response_model=VariantCasesPage)
@@ -703,45 +437,8 @@ async def list_variant_cases(
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
 ) -> VariantCasesPage:
     await _require_ready(log_id, session, user.id)
-    async with EventLogAccess(log_id, user.id) as access:
-        # Rebuild the variant's activity sequence on the fly so we can match cases.
-        # The variant_id alone isn't enough since it's a hash - but we have the
-        # cases.parquet which already stores variant_id per case (computed at
-        # import / on every edit), so we join through that.
-        if not access._paths.cases.exists():  # type: ignore[attr-defined]
-            return VariantCasesPage(rows=[], total=0, offset=offset, limit=limit)
-
-        (total,) = (
-            await access.duckdb_fetch(
-                "SELECT COUNT(*) FROM cases WHERE variant_id = ?",
-                [variant_id],
-            )
-        )[0]
-        rows = await access.duckdb_fetch(
-            """
-            SELECT case_id, case_start, case_end, case_duration_seconds, event_count
-            FROM cases
-            WHERE variant_id = ?
-            ORDER BY case_start DESC NULLS LAST
-            LIMIT ? OFFSET ?
-            """,
-            [variant_id, limit, offset],
-        )
-
-    return VariantCasesPage(
-        rows=[
-            VariantCase(
-                case_id=str(r[0]),
-                case_start=r[1],
-                case_end=r[2],
-                case_duration_seconds=float(r[3]) if r[3] is not None else None,
-                event_count=int(r[4]),
-            )
-            for r in rows
-        ],
-        total=int(total),
-        offset=offset,
-        limit=limit,
+    return await log_aggregates.variant_cases_page(
+        log_id, user.id, variant_id, offset=offset, limit=limit
     )
 
 
@@ -751,10 +448,7 @@ async def list_variant_cases(
 @router.get("/data-quality", response_model=DataQuality)
 async def get_data_quality(log_id: str, session: SessionDep, user: CurrentUserDep) -> DataQuality:
     log_row = await _require_ready(log_id, session, user.id)
-    overrides = log_row.column_overrides if isinstance(log_row.column_overrides, dict) else None
-    async with EventLogAccess(log_id, user.id, log_row.active_filter) as access:
-        specs = await access.column_specs(overrides)
-        return await access.data_quality(specs)
+    return await log_aggregates.data_quality_report(log_row, user.id)
 
 
 @router.get("/edits", response_model=EventEditsPage)
@@ -807,11 +501,40 @@ async def list_activities(log_id: str, session: SessionDep, user: CurrentUserDep
     keep operating on the canonical values.
     """
     log_row = await _require_ready(log_id, session, user.id)
-    async with EventLogAccess(log_id, user.id, log_row.active_filter) as access:
-        rows = await access.duckdb_fetch(
-            "SELECT activity, COUNT(*) AS n FROM events GROUP BY activity ORDER BY n DESC, activity ASC"
-        )
+    counts = await log_aggregates.activity_counts(log_row, user.id)
     return ActivitiesPage(
-        rows=[ActivityRow(activity=str(r[0]), count=int(r[1])) for r in rows],
-        total=len(rows),
+        rows=[ActivityRow(activity=a, count=n) for a, n in counts],
+        total=len(counts),
+    )
+
+
+# The activity name travels as a query param, not a path segment: names are
+# arbitrary strings (may contain `/`, `%`, unicode) and the prod proxy chain
+# can normalize percent-escapes inside path segments; query strings pass
+# through untouched.
+
+
+@router.get("/activities/detail", response_model=ActivityDetail)
+async def get_activity_detail(
+    log_id: str,
+    session: SessionDep,
+    user: CurrentUserDep,
+    name: Annotated[str, Query(min_length=1)],
+) -> ActivityDetail:
+    log_row = await _require_ready(log_id, session, user.id)
+    return await log_aggregates.activity_detail(log_row, user.id, name)
+
+
+@router.get("/activities/cases", response_model=ActivityCasesPage)
+async def list_activity_cases(
+    log_id: str,
+    session: SessionDep,
+    user: CurrentUserDep,
+    name: Annotated[str, Query(min_length=1)],
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+) -> ActivityCasesPage:
+    await _require_ready(log_id, session, user.id)
+    return await log_aggregates.activity_cases_page(
+        log_id, user.id, name, offset=offset, limit=limit
     )

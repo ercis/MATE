@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 import textwrap
-from typing import Dict, List
 
 from langchain_core.language_models import BaseChatModel
 from pydantic.v1 import BaseModel, Field
@@ -30,7 +29,7 @@ def _format_chat_history(chat_history: list) -> str:
     return "\n".join(f"Human: {q}\nAssistant: {a}" for q, a in chat_history)
 
 
-def _format_full_analysis_context(full_state_log: List[Dict]) -> str:
+def _format_full_analysis_context(full_state_log: list[dict]) -> str:
     out = ""
     for i, state in enumerate(full_state_log, 1):
         drift_info = state.get("drift_info", {}) or {}
@@ -38,17 +37,17 @@ def _format_full_analysis_context(full_state_log: List[Dict]) -> str:
         ranked_causes = explanation.get("ranked_causes", []) or []
         causes_list = (
             "\n".join(
-                f"    - {c.get('source_document', 'N/A')}: \""
-                f"{(c.get('evidence_snippet', '') or '')[:100]}…\""
+                f'    - {c.get("source_document", "N/A")}: "'
+                f'{(c.get("evidence_snippet", "") or "")[:100]}…"'
                 for c in ranked_causes
             )
             or "    - None"
         )
         out += textwrap.dedent(
             f"""\
-            ### Drift #{i}: {drift_info.get('drift_type')}
-            - **Timeframe:** {drift_info.get('start_timestamp')} to {drift_info.get('end_timestamp')}
-            - **Summary:** {explanation.get('summary')}
+            ### Drift #{i}: {drift_info.get("drift_type")}
+            - **Timeframe:** {drift_info.get("start_timestamp")} to {drift_info.get("end_timestamp")}
+            - **Summary:** {explanation.get("summary")}
             - **Causal Documents:**
             {causes_list}
             """
@@ -103,7 +102,7 @@ def make_chatbot_agent(*, llm: BaseChatModel):
                 "answer questions related to the drift analysis, the process, "
                 "and the provided evidence. How can I help you with the analysis?"
             )
-            return {"chat_history": chat_history + [(user_question, ai_answer)]}
+            return {"chat_history": [*chat_history, (user_question, ai_answer)]}
 
         full_context = textwrap.dedent(
             f"""
@@ -139,6 +138,6 @@ def make_chatbot_agent(*, llm: BaseChatModel):
                 logging.error("Chatbot agent failed: %s", e)
                 return {"error_message": str(e)}
 
-        return {"chat_history": chat_history + [(user_question, cached)]}
+        return {"chat_history": [*chat_history, (user_question, cached)]}
 
     return run_chatbot_agent

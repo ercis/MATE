@@ -4,10 +4,11 @@ audit endpoints (used by the Events / Variants / Settings tabs).
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from mate.api.schemas.common import UtcDateTime
 
 ColumnType = Literal["string", "number", "datetime", "duration", "enum", "boolean"]
 ColumnRole = Literal[
@@ -43,8 +44,8 @@ class EventsHeader(BaseModel):
     events_count: int
     cases_count: int
     variants_count: int
-    date_min: datetime | None = None
-    date_max: datetime | None = None
+    date_min: UtcDateTime | None = None
+    date_max: UtcDateTime | None = None
 
 
 class EventsPage(BaseModel):
@@ -147,8 +148,8 @@ class VariantRow(BaseModel):
     case_pct: float
     avg_duration_seconds: float | None = None
     median_duration_seconds: float | None = None
-    first_seen: datetime | None = None
-    last_seen: datetime | None = None
+    first_seen: UtcDateTime | None = None
+    last_seen: UtcDateTime | None = None
 
 
 class VariantsPage(BaseModel):
@@ -180,8 +181,8 @@ class VariantDetail(BaseModel):
     avg_duration_seconds: float | None = None
     median_duration_seconds: float | None = None
     p90_duration_seconds: float | None = None
-    first_seen: datetime | None = None
-    last_seen: datetime | None = None
+    first_seen: UtcDateTime | None = None
+    last_seen: UtcDateTime | None = None
     duration_histogram: list[int]
     duration_bin_edges_seconds: list[float]
     attribute_breakdowns: list[AttributeBreakdown]
@@ -189,8 +190,8 @@ class VariantDetail(BaseModel):
 
 class VariantCase(BaseModel):
     case_id: str
-    case_start: datetime | None = None
-    case_end: datetime | None = None
+    case_start: UtcDateTime | None = None
+    case_end: UtcDateTime | None = None
     case_duration_seconds: float | None = None
     event_count: int
 
@@ -229,6 +230,39 @@ class ActivitiesPage(BaseModel):
     total: int
 
 
+class ActivityDetail(BaseModel):
+    """Response for `GET /activities/detail` - drives the activity detail page."""
+
+    activity: str
+    event_count: int
+    event_pct: float
+    case_count: int
+    case_pct: float
+    avg_occurrences_per_case: float | None = None
+    max_occurrences_per_case: int | None = None
+    start_case_count: int
+    start_case_pct: float
+    end_case_count: int
+    end_case_pct: float
+    first_seen: UtcDateTime | None = None
+    last_seen: UtcDateTime | None = None
+    # Variants whose sequence contains the activity (exact membership, unlike
+    # the variants listing's substring `activity_contains`).
+    variant_count: int
+    top_variants: list[VariantRow]
+
+
+class ActivityCase(VariantCase):
+    occurrences: int
+
+
+class ActivityCasesPage(BaseModel):
+    rows: list[ActivityCase]
+    total: int
+    offset: int
+    limit: int
+
+
 class EventEditEntry(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -238,7 +272,7 @@ class EventEditEntry(BaseModel):
     field: str
     old_value_json: Any | None = None
     new_value_json: Any | None = None
-    edited_at: datetime
+    edited_at: UtcDateTime
 
 
 class EventEditsPage(BaseModel):

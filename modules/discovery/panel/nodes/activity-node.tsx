@@ -1,6 +1,6 @@
 "use client";
 
-import { Handle, type Node, type NodeProps } from "@xyflow/react";
+import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import { Play, Square } from "lucide-react";
 
 import { cn } from "@/lib/cn";
@@ -22,14 +22,84 @@ export interface ActivityNodeData extends Record<string, unknown> {
   /** Sub-line under the label, e.g. "12 min" for performance edges' source nodes. */
   metric?: string;
   highlighted?: boolean;
+  /** "vertical" pins handles to Top/Bottom regardless of the general layout
+   *  direction — set by the vertical-only Process-flow layout so edge anchors
+   *  (and the drag fallback bezier) stay correct even when the user's general
+   *  direction is LR. */
+  handleOrientation?: "vertical";
+  /** "celonis" renders the 1:1 Celonis card skin (compact white card, leading
+   *  ring, abbreviated count) — used by the "Process flow (Celonis)" mode. */
+  variant?: "celonis";
+  /** Abbreviated count (36.7K) for the celonis skin. */
+  countLabel?: string;
+  /** frequency / maxFrequency (0..1) — drives the KPI dot size. */
+  freqRatio?: number;
 }
 
 export type ActivityNode = Node<ActivityNodeData, "activity">;
 
 export function ActivityNode({ data, selected }: NodeProps<ActivityNode>) {
   const { layoutDirection } = useGeneralSettings();
-  const { source, target } = handlePositions(layoutDirection);
+  const { source, target } =
+    data.handleOrientation === "vertical"
+      ? { source: Position.Bottom, target: Position.Top }
+      : handlePositions(layoutDirection);
   const intensity = Math.max(0, Math.min(1, data.intensity ?? 0));
+
+  if (data.variant === "celonis") {
+    // 1:1 Celonis card (measured: white, 1px border, radius 8, padding
+    // 4/16/4/8, 20px leading ring, 13px title, 11px muted count).
+    return (
+      <div
+        className={cn(
+          "relative flex h-full w-full items-center gap-2 rounded-lg border bg-card shadow-sm transition-shadow cursor-pointer",
+          "hover:shadow-md",
+          selected && "ring-2 ring-primary ring-offset-1 ring-offset-background",
+          data.highlighted && !selected && "ring-2 ring-primary/60 ring-offset-1 ring-offset-background",
+        )}
+        style={{ padding: "4px 16px 4px 8px" }}
+      >
+        <Handle type="target" position={target} className="!h-1.5 !w-1.5 !border-0 !bg-transparent" />
+        <span
+          className="flex shrink-0 items-center justify-center rounded-full"
+          style={{
+            width: 20,
+            height: 20,
+            background: "color-mix(in oklab, var(--dfg-edge, rgb(36, 148, 153)) 20%, transparent)",
+          }}
+        >
+          {/* Celonis KPI dot: area encodes the activity's share of the max
+              frequency (6–16px via sqrt so area ∝ ratio). */}
+          <span
+            className="rounded-full"
+            style={{
+              width: 6 + 10 * Math.sqrt(Math.max(0, Math.min(1, data.freqRatio ?? 0.3))),
+              height: 6 + 10 * Math.sqrt(Math.max(0, Math.min(1, data.freqRatio ?? 0.3))),
+              background: "var(--dfg-edge, rgb(36, 148, 153))",
+            }}
+          />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div
+            className="overflow-hidden text-[13px] font-normal leading-[15px] text-foreground"
+            title={data.label}
+            style={{
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+              overflowWrap: "anywhere",
+            }}
+          >
+            {data.label}
+          </div>
+          <div className="text-[11px] font-medium leading-3 text-muted-foreground">
+            {data.countLabel ?? formatNumber(data.frequency)}
+          </div>
+        </div>
+        <Handle type="source" position={source} className="!h-1.5 !w-1.5 !border-0 !bg-transparent" />
+      </div>
+    );
+  }
 
   return (
     <div

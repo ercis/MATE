@@ -10,12 +10,30 @@ import { cn } from "@/lib/cn"
 // override the outer Card with `className="py-0 gap-0"` and put your own
 // padding on the inner section (see components/processes/module-card.tsx).
 
-function Card({ className, ...props }: React.ComponentProps<"div">) {
+type CardVariant = "default" | "elevated"
+
+// Surface treatments – both opaque. The translucent `glass`/`frosted`/`liquid`
+// surfaces were removed: cards read as solid panels everywhere (settings,
+// admin, modules, process detail). Don't reintroduce backdrop-blur here; the
+// blur belongs to floating chrome (dialogs, popovers, the sidebar), not to
+// cards sitting in page flow.
+const cardSurfaces: Record<CardVariant, string> = {
+  default: "border bg-card shadow-md",
+  elevated: "border bg-surface-elevated shadow-lg",
+}
+
+function Card({
+  className,
+  variant = "default",
+  ...props
+}: React.ComponentProps<"div"> & { variant?: CardVariant }) {
   return (
     <div
       data-slot="card"
+      data-variant={variant}
       className={cn(
-        "flex flex-col gap-5 rounded-[18px] border bg-card py-6 text-card-foreground shadow-md",
+        "flex flex-col gap-5 rounded-[18px] py-6 text-card-foreground",
+        cardSurfaces[variant],
         className,
       )}
       {...props}

@@ -1,10 +1,11 @@
-import pandas as pd
-import numpy as np
 import copy
 import itertools
-from operator import itemgetter
-import pm4py
 import os
+from operator import itemgetter
+
+import numpy as np
+import pandas as pd
+import pm4py
 
 
 def _sort_log(log):

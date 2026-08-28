@@ -19,7 +19,17 @@ def variant_id_for(activities: tuple[str, ...]) -> str:
     Kept as a module-level helper so other code (e.g. variant lookups) can
     derive the id from a sequence without re-loading cases.parquet.
     """
-    return hashlib.blake2b("→".join(activities).encode("utf-8"), digest_size=8).hexdigest()
+    return variant_id_for_str("→".join(activities))
+
+
+def variant_id_for_str(activities_str: str) -> str:
+    """`variant_id_for` over an already-joined ``a→b→c`` sequence string.
+
+    Skips the split/re-join round-trip - identical output, since joining a
+    split string with the same separator reproduces the input. Used on the
+    variants hot path where DuckDB hands back the joined string per variant.
+    """
+    return hashlib.blake2b(activities_str.encode("utf-8"), digest_size=8).hexdigest()
 
 
 def compute_cases(df: pd.DataFrame) -> pd.DataFrame:
@@ -53,4 +63,4 @@ def compute_cases(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-__all__ = ["compute_cases", "variant_id_for"]
+__all__ = ["compute_cases", "variant_id_for", "variant_id_for_str"]

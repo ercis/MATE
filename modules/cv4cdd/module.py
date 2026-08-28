@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import os
 import re
 import shutil
@@ -31,29 +30,20 @@ from typing import Any
 # ── Warm heavy imports on the loader's main thread ─────────────────────────────
 #
 # Several modules auto-run jobs on `log.imported` and lazily `import pm4py` from
-# inside `asyncio.to_thread` worker threads. cv4cdd is the only one that reaches
-# pm4py through *deep* submodules (pm4py.algo.filtering.*, pm4py.objects.*) while
-# the others enter via a plain top-level `import pm4py`. When two of those jobs
-# run at once, two worker threads import overlapping pm4py graphs through
-# different entry points in different orders, which trips CPython's per-module
-# import-lock deadlock detector ("deadlock detected by _ModuleLock('pm4py.algo
-# .filtering')") and fails the job.
+# inside `asyncio.to_thread` worker threads. When two of those jobs run at once,
+# two worker threads import overlapping pm4py graphs in different orders, which
+# can trip CPython's per-module import-lock deadlock detector ("deadlock detected
+# by _ModuleLock(...)") and fail the job.
 #
-# Importing the exact submodules here - sequentially, on the loader's main thread
-# at module-load time - guarantees they are already in sys.modules before any
-# worker thread touches them, so the in-thread imports below are just cache hits
-# and cv4cdd can never be a party to the race. TensorFlow is deliberately left
+# Importing pm4py here - on the loader's main thread at module-load time -
+# guarantees it is already in sys.modules before any worker thread touches it, so
+# `cv4cdd_core`'s in-thread `from pm4py import discover_dfg_typed` is just a cache
+# hit and cv4cdd can never be a party to the race. TensorFlow is deliberately left
 # lazy (it's ~0.5 GB and only needed on an actual run); its import is serialised
 # separately in cv4cdd_core.
 import pm4py  # noqa: F401
 from fastapi import HTTPException, UploadFile
 from fastapi.responses import Response
-from pm4py.algo.filtering.log.attributes import (  # noqa: F401
-    attributes_filter as _warm_attributes_filter,
-)
-from pm4py.objects.conversion.log import converter as _warm_log_converter  # noqa: F401
-from pm4py.objects.log.importer.xes import importer as _warm_xes_importer  # noqa: F401
-from pm4py.objects.log.util import dataframe_utils as _warm_dataframe_utils  # noqa: F401
 
 from mate.sdk import Module, ModuleContext, job, on_event, route
 
@@ -91,9 +81,7 @@ def _list_models() -> list[str]:
     if not MODEL_ROOT.is_dir():
         return []
     return sorted(
-        p.name
-        for p in MODEL_ROOT.iterdir()
-        if not p.name.startswith(".") and _is_model_dir(p)
+        p.name for p in MODEL_ROOT.iterdir() if not p.name.startswith(".") and _is_model_dir(p)
     )
 
 
@@ -186,9 +174,7 @@ class Cv4cddModule(Module):
 
     @on_event("log.imported")
     @job(progress=True, title="CV4CDD - auto-detecting drifts")
-    async def on_log_imported(
-        self, ctx: ModuleContext, payload: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def on_log_imported(self, ctx: ModuleContext, payload: dict[str, Any]) -> dict[str, Any]:
         """Auto-run detection right after a log finishes importing.
 
         The loader stacks this as a job so the user sees a progress toast
@@ -257,95 +243,52 @@ class Cv4cddModule(Module):
         }
 
     async def _load_sorted_df(self, ctx: ModuleContext) -> Any:
-        """Return a DataFrame sorted so that traces appear in pm4py TIMESTAMP_SORT
-        order - exactly matching the reference pipeline.
+        """Return the platform's canonical event frame, sorted so traces appear
+        in the order the reference pipeline windows them.
 
-        The platform stores events.parquet sorted by (case_id, timestamp), which
-        gives alphabetical trace ordering for same-timestamp ties.  The reference
-        uses pm4py's XES importer with TIMESTAMP_SORT=True, which preserves the
-        original XES file order for ties.  For logs with many traces starting at
-        the same placeholder timestamp (e.g. midnight) this produces different
-        window assignments.
+        WINSIM slices the log into windows of equal *trace count*, so the trace
+        order IS the x-axis of the similarity image. Get it wrong and every
+        detection is meaningless. The reference gets that order from pm4py's XES
+        importer with ``TIMESTAMP_SORT=True``, which sorts events inside each
+        trace and then sorts traces by their first event's timestamp
+        (``pm4py/objects/log/util/sorting.py``). Sorting the events by timestamp
+        and taking ``pd.unique`` of the case column reproduces exactly that.
 
-        When the original XES file is still on disk we re-import it via pm4py to
-        recover the exact ordering.  For CSV logs (no XES file) we fall back to
-        the Parquet and sort by (start_timestamp, case_id) - consistent and
-        reproducible, though it may differ from the reference for tied timestamps.
+        This has to be done explicitly: ``events.parquet`` is stored sorted by
+        ``(case_id, timestamp)``, so reading it and taking the case column in
+        row order yields *alphabetical* trace order (`c1, c10, c100, …`) - the
+        historical bug that scrambled every window.
+
+        Sorting by ``(timestamp, case_id)`` rather than by timestamp alone makes
+        the *trace* order a pure function of the data: for logs with many traces
+        sharing a start timestamp, a plain stable sort would inherit the tie
+        order from whatever row order the caller happened to hand us. On the
+        stored Parquet both are identical (it is already case_id-major), but the
+        explicit key holds for any input. Events sharing BOTH case_id and
+        timestamp are genuinely unordered in the data; their directly-follows
+        order stays whatever the Parquet holds, which ingest writes with a stable
+        mergesort over the parsed file order (``ingest/dispatch.py``).
+
+        We deliberately do NOT re-import ``original.xes`` to match the
+        reference's tie-breaking byte-for-byte. That path reported drift
+        timestamps shifted by the log's UTC offset (pm4py's iterparse stamps the
+        local wall-clock as UTC), bypassed the user's applied Events-tab filter
+        and cell edits, silently dropped non-``complete`` lifecycle events, and
+        only existed for XES logs on local disk - so the same log produced
+        different detections depending on the source format and whether the
+        upload was still cached (S3 deploys never hydrate ``original.*``).
         """
         async with ctx.event_log as log:
-            # events_path is public; derive the log root from it.
-            log_root = log.events_path.parent
-            meta_path = log_root / "meta.json"
-
-            source_format: str = ""
-            if meta_path.exists():
-                try:
-                    source_format = json.loads(meta_path.read_text()).get(
-                        "source_format", ""
-                    )
-                except Exception:
-                    pass
-
-            # Try to load via pm4py when the original XES file is present.
-            for ext in ([source_format] if source_format else []) + ["xes", "xes.gz"]:
-                original = log_root / f"original.{ext}"
-                if original.exists() and ext in {"xes", "xes.gz"}:
-                    return await asyncio.to_thread(self._load_xes_df, original)
-
-            # Fallback: read Parquet and apply a deterministic trace sort.
             df = await log.pandas()
 
-        # Sort events by timestamp (mergesort keeps Parquet row order for ties,
-        # which is alphabetical case_id - reproducible even if not identical to
-        # the reference's XES file order).
-        return df.sort_values("timestamp", kind="mergesort").reset_index(drop=True)
-
-    @staticmethod
-    def _load_xes_df(xes_path: Path) -> Any:
-        """Load an XES file via pm4py with TIMESTAMP_SORT=True.
-
-        This replicates the reference pipeline's import step exactly, giving
-        the same trace order as the standalone cv4cdd tool.
-        """
-        import pandas as pd
-        from pm4py.algo.filtering.log.attributes import attributes_filter
-        from pm4py.objects.conversion.log import converter as log_converter
-        from pm4py.objects.log.importer.xes import importer as xes_importer
-        from pm4py.objects.log.util import dataframe_utils
-
-        variant = xes_importer.Variants.ITERPARSE
-        parameters = {
-            variant.value.Parameters.TIMESTAMP_SORT: True,
-            variant.value.Parameters.SHOW_PROGRESS_BAR: False,
-        }
-        event_log = xes_importer.apply(
-            str(xes_path), variant=variant, parameters=parameters
+        # Project to the three columns the pipeline uses: a stray column (e.g.
+        # `start_timestamp`) would otherwise reach pm4py's DFG discovery and
+        # change its internal sort.
+        return (
+            df[["case_id", "activity", "timestamp"]]
+            .sort_values(["timestamp", "case_id"], kind="mergesort")
+            .reset_index(drop=True)
         )
-
-        # Mirror the reference's filter_complete_events (no-op when the log
-        # has no lifecycle:transition attribute).
-        try:
-            event_log = attributes_filter.apply_events(
-                event_log,
-                ["complete", "COMPLETE"],
-                parameters={
-                    attributes_filter.Parameters.ATTRIBUTE_KEY: "lifecycle:transition",
-                    attributes_filter.Parameters.POSITIVE: True,
-                },
-            )
-        except Exception:
-            pass
-
-        df = log_converter.apply(event_log, variant=log_converter.Variants.TO_DATA_FRAME)
-        df = dataframe_utils.convert_timestamp_columns_in_df(df, timest_format="ISO8601")
-
-        return df.rename(
-            columns={
-                "case:concept:name": "case_id",
-                "concept:name": "activity",
-                "time:timestamp": "timestamp",
-            }
-        )[["case_id", "activity", "timestamp"]].copy()
 
     def _run_sync(
         self,
@@ -360,14 +303,10 @@ class Cv4cddModule(Module):
 
         def progress(fraction: float, message: str) -> None:
             # Fire-and-forget on the main loop; we don't await so the worker
-            # thread isn't blocked on the WebSocket write.
-            try:
-                asyncio.run_coroutine_threadsafe(
-                    ctx.progress.update(fraction, message), loop
-                )
-            except RuntimeError:
-                # Loop is closed (shutdown in progress) - drop the update.
-                pass
+            # thread isn't blocked on the WebSocket write. RuntimeError means the
+            # loop is closed (shutdown in progress) - drop the update.
+            with contextlib.suppress(RuntimeError):
+                asyncio.run_coroutine_threadsafe(ctx.progress.update(fraction, message), loop)
 
         return cv4cdd_core.run_detection(
             df=df,
@@ -486,9 +425,7 @@ class Cv4cddModule(Module):
             raise
         except Exception as exc:  # surface install failure to the UI
             ctx.logger.exception("cv4cdd.model_upload_failed", model=name)
-            raise HTTPException(
-                status_code=500, detail=f"Failed to install model: {exc}"
-            ) from exc
+            raise HTTPException(status_code=500, detail=f"Failed to install model: {exc}") from exc
         finally:
             await file.close()
             if archive and archive.exists():

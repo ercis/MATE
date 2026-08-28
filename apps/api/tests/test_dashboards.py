@@ -222,3 +222,103 @@ async def test_dashboard_binds_matching_object_centric_log(client: AsyncClient) 
     )
     assert resp.status_code == 201, resp.text
     assert resp.json()["event_log_id"] == log_id
+
+
+# ── 12-column grid: coercion + the clamp-not-skip guard ──────────────────────
+
+
+@pytest.mark.asyncio
+async def test_stored_out_of_range_card_is_clamped_not_dropped(client: AsyncClient) -> None:
+    """Tightening the grid bounds must never delete a user's card.
+
+    Before the 12-column grid, `x` was valid up to 59. `dashboard_items()` used
+    to skip any card that failed validation, so narrowing the bound would have
+    silently wiped every card past column 11 the moment this shipped. It must
+    clamp the geometry and keep the card instead.
+    """
+    from mate.api.db.engine import get_sessionmaker
+    from mate.api.db.models import Dashboard
+
+    resp = await client.post("/api/v1/dashboards", json={"name": "Legacy geometry"})
+    dash_id = resp.json()["id"]
+
+    # Write pre-v2 geometry straight into the blob, with NO legacy marker - so
+    # coercion cannot rescue it and only the clamp can.
+    sm = get_sessionmaker()
+    async with sm() as session:
+        row = await session.get(Dashboard, dash_id)
+        assert row is not None
+        row.layout_json = {
+            "items": [
+                {**_item("wide"), "x": 48, "w": 24},
+                {**_item("tall"), "y": 99999, "h": 400},
+                {"i": "broken", "kind": "widget", "module_id": "performance"},  # no widget_id
+            ],
+            "settings": {"chrome": {"border": True}, "presets": []},
+        }
+        await session.commit()
+
+    body = (await client.get(f"/api/v1/dashboards/{dash_id}")).json()
+    cards = {c["i"]: c for c in body["items"]}
+    # Both salvageable cards survive; only the genuinely malformed one is gone.
+    assert set(cards) == {"wide", "tall"}
+    assert cards["wide"]["w"] == 12
+    assert cards["wide"]["x"] == 0  # pulled back so x + w stays on the grid
+    assert cards["tall"]["y"] <= 400
+    assert cards["tall"]["h"] <= 48
+
+
+@pytest.mark.asyncio
+async def test_out_of_grid_geometry_is_normalised_at_write(client: AsyncClient) -> None:
+    """The schema accepts legacy-wide geometry; storage must still be 12-col.
+
+    `DashboardItem` allows x up to 59 so old export files import (see
+    test_dashboard_item_schema.py). That makes `layout_blob` the only place the
+    12-column invariant can hold - so an unmarked, out-of-grid payload must
+    come back clamped, not stored as sent.
+    """
+    resp = await client.post(
+        "/api/v1/dashboards",
+        json={
+            "name": "Wide input",
+            # No `granularity` marker, so coercion does not apply - only the clamp.
+            "items": [{**_item("wide"), "x": 48, "w": 24}],
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    card = resp.json()["items"][0]
+    assert card["w"] == 12
+    assert card["x"] == 0  # pulled back so x + w stays on the grid
+
+    # And it is the *stored* value, not just the response.
+    body = (await client.get(f"/api/v1/dashboards/{resp.json()['id']}")).json()
+    assert (body["items"][0]["x"], body["items"][0]["w"]) == (0, 12)
+
+
+@pytest.mark.asyncio
+async def test_legacy_export_imports_onto_the_12_column_grid(client: AsyncClient) -> None:
+    """A board file exported before the rework still carries `granularity`."""
+    legacy_doc = {
+        "kind": "mate.dashboard",
+        "version": 1,
+        "name": "From an old build",
+        "log_model": "case_centric",
+        # 24-column geometry: a right-half card.
+        "items": [{**_item("half"), "x": 12, "w": 12}],
+        "settings": {"granularity": "medium", "chrome": {"border": True}, "presets": []},
+    }
+    resp = await client.post("/api/v1/dashboards/import", json=legacy_doc)
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+
+    card = body["items"][0]
+    assert (card["x"], card["w"]) == (6, 6)  # 24 -> 12 columns
+    assert "granularity" not in body["settings"]
+    assert body["settings"]["grid_version"] == 2
+
+    # Re-exporting the migrated board yields a v2 file, so a second import
+    # round-trip cannot rescale it again.
+    doc = (await client.get(f"/api/v1/dashboards/{body['id']}/export")).json()
+    assert "granularity" not in doc["settings"]
+    reimported = (await client.post("/api/v1/dashboards/import", json=doc)).json()
+    assert (reimported["items"][0]["x"], reimported["items"][0]["w"]) == (6, 6)

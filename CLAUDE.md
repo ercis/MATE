@@ -15,7 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Mate is a locally-hosted, modular **process mining** platform. Two app services (`api` + `web`) plus a bundled Keycloak (OIDC) for login. All application data is embedded and on-disk (SQLite metadata + DuckDB/Parquet event logs) – no broker, no cloud. Every user gets a fully isolated workspace; nothing crosses accounts.
 
-Deeper rationale lives in [`INSTRUCTIONS.md`](./INSTRUCTIONS.md) (design) and [`modules/README.md`](./modules/README.md) (the module authoring contract). [`DEPLOY.md`](./DEPLOY.md) covers the VM deploy. Read those before large changes – this file is the orientation, not the full spec.
+Deeper rationale lives in [`docs/INSTRUCTIONS.md`](./docs/INSTRUCTIONS.md) (design) and [`modules/README.md`](./modules/README.md) (the module authoring contract). [`docs/DEPLOY.md`](./docs/DEPLOY.md) covers the VM deploy; [`docs/MCP.md`](./docs/MCP.md) is the MCP server's consumer reference (tools, scopes, client setup). [`docs/README.md`](./docs/README.md) indexes every doc. Read those before large changes – this file is the orientation, not the full spec.
 
 ## Commands
 
@@ -46,6 +46,7 @@ make up / up-dev    # docker compose (prod-style / dev overlay with hot reload)
 - `apps/web/` – Next.js 15 (App Router, React 19, Tailwind, shadcn-style UI in `components/ui/`).
 - `packages/module-sdk-py/` – Python SDK module authors subclass (`mate.sdk`).
 - `packages/module-sdk-ts/` – TS SDK for module frontends (`@mate/module-sdk-ts`).
+- `packages/module-sdk-jvm/` – Java SDK for JVM modules (Gradle; `make sdk-jvm`).
 - `packages/shared-types/` – generated TS types from OpenAPI.
 - `modules/` – bundled module packages, discovered at startup (see below).
 - `data/` – bind-mounted: `metadata.db` (SQLite), per-user Parquet under `users/{user_id}/`, uploaded modules, cached uv runtimes. `make clean` wipes it.
@@ -59,6 +60,7 @@ Modules are the extension mechanism – process-discovery, performance, complexi
 - A module is a `Module` subclass (`module.py`) instantiated **once per process**. Handlers receive a `ModuleContext` (`packages/module-sdk-py/src/mate/sdk/context.py`) exposing the event log (DuckDB/pandas/polars/pm4py), per-`(log_id, module_id)` cache, config, progress reporter, bus, and capability registry. All as typed Protocols – depend on the Protocol, not the impl.
 - Modules talk to each other two ways: the **event bus** (fire-and-forget, must declare `provides:`/`consumes:` in the manifest) and the **capability registry** (typed request/response RPC).
 - `isolation: subprocess` in a manifest runs the module in a long-lived worker on its own venv Python, proxied over Unix-socket JSON-RPC (`subprocess_host.py` / `subprocess_worker.py`) – for a **different Python version** than the platform or a hard native-lib conflict. Supports `@route`/`@job`/`@on_event`; DataFrames (`event_log.pandas()/polars()/pm4py()`) cross via a Parquet handoff on the shared filesystem.
+- **Modules don't have to be Python.** A manifest `runtime:` block (`kind: jvm`, self-contained fat jar, JRE baked into the api image) mounts the module through the same bridge; the wire contract is `modules/PROTOCOL.md`, per-runtime materialise/launch lives in `modules/runtimes/`, and `modules/performance_java` is the reference. Node/R kinds are design-reserved (rejected today). Worker crashes auto-respawn with backoff (`test_bridge_respawn.py`); cross-runtime conformance in `test_worker_conformance.py` (JVM cases need `make sdk-jvm` + a JDK, else they skip).
 - **Per-user ownership** is reference-counted via the `module_installs` table – modules are shared in-process code but each user owns their install (gates list/upload/delete). Don't assume a module is globally enabled.
 - **Frontend panels** are bundled separately by `apps/web/scripts/bundle-modules.mjs` (runs on `predev`/`build` and watches in dev), NOT by the Next build. Panels may only import `@/` paths listed in `apps/web/lib/runtime-externals.json` – other imports break the esbuild bundle.
 

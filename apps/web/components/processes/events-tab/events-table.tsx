@@ -190,7 +190,6 @@ function EventTableRow({
           <TableCell
             key={col.name}
             className={cn(
-              "align-top",
               hasMissing && col.required && (value === null || value === undefined) && "text-amber-600 dark:text-amber-400",
             )}
           >

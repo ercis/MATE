@@ -235,6 +235,26 @@ def _serialize_ocpn(ocpn: Any) -> dict[str, Any]:
 class OcelDiscoveryModule(Module):
     id = "ocel_discovery"
 
+    guidance_system_prompt = (
+        "You are a process-mining analyst interpreting object-centric process "
+        "discovery output: object types, per-type object counts and "
+        "activity-to-object-type relationships. Reason about how object types "
+        "interact through shared events; never assume a single case notion."
+    )
+    guidance_user_prefix = "Interpret this object-centric discovery summary:"
+
+    async def guidance_payload(self, ctx: ModuleContext) -> dict[str, Any] | None:
+        """Cache-only summary for AI guidance.
+
+        Every view in this module is computed per-request from
+        ``ctx.object_log`` and nothing is ever written to ``ctx.cache`` - so
+        there are no cached artifacts to summarise, and the restricted AI/MCP
+        context (which walls off the object log) leaves nothing to compute
+        from either. Returns ``None`` until this module starts caching
+        results.
+        """
+        return None
+
     @route.get("/summary")
     async def summary(self, ctx: ModuleContext) -> dict[str, Any]:
         if ctx.object_log is None:

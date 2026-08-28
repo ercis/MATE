@@ -1,5 +1,6 @@
 import pandas as pd
 
+
 def get_interaction_net_probabilities(df):
     """
     For calculating the handover probabilities between agent types in the agentminer interaction net

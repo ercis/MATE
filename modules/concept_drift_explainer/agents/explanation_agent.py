@@ -10,8 +10,6 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
-from pathlib import Path
-from typing import List
 
 from langchain_core.language_models import BaseChatModel
 from pydantic.v1 import BaseModel, Field
@@ -32,21 +30,15 @@ class Cause(BaseModel):
     evidence_snippet: str = Field(
         description="The specific text snippet that supports the analysis."
     )
-    source_document: str = Field(
-        description="The name of the source document for the evidence."
-    )
-    context_category: str = Field(
-        description="The most relevant Franzoi context category path."
-    )
-    confidence_score: float = Field(
-        description="The data-driven confidence score for this cause."
-    )
+    source_document: str = Field(description="The name of the source document for the evidence.")
+    context_category: str = Field(description="The most relevant Franzoi context category path.")
+    confidence_score: float = Field(description="The data-driven confidence score for this cause.")
 
 
 class RefinedCauseList(BaseModel):
     """A list of refined potential causes for the drift."""
 
-    ranked_causes: List[Cause] = Field(
+    ranked_causes: list[Cause] = Field(
         description="A list of refined potential causes for the drift, ordered by importance."
     )
 
@@ -310,9 +302,7 @@ def make_explanation_agent(
     context_namespace: str = CONTEXT_NS_DEFAULT,
 ):
     structured_cause = llm.with_structured_output(Cause, method="json_mode")
-    structured_refine = llm.with_structured_output(
-        RefinedCauseList, method="json_mode"
-    )
+    structured_refine = llm.with_structured_output(RefinedCauseList, method="json_mode")
     response_cache: dict[str, object] = {}
 
     def _invoke_structured(structured_llm, prompt: str, schema_name: str) -> dict:
@@ -407,21 +397,16 @@ def make_explanation_agent(
                 draft_causes.append(cause_dict)
 
             drafts_for_prompt = [
-                {k: v for k, v in c.items() if k != "confidence_score"}
-                for c in draft_causes
+                {k: v for k, v in c.items() if k != "confidence_score"} for c in draft_causes
             ]
             refine_prompt = REFINE_PROMPT_TEMPLATE.format(
                 formatted_glossary=_format_context_for_prompt(glossary_context),
                 formatted_evidence=_format_context_for_prompt(usable_evidence),
-                draft_causes=json.dumps(
-                    {"ranked_causes": drafts_for_prompt}, indent=2
-                ),
+                draft_causes=json.dumps({"ranked_causes": drafts_for_prompt}, indent=2),
             )
             cached = response_cache.get(refine_prompt)
             if cached is None:
-                cached = _invoke_structured(
-                    structured_refine, refine_prompt, "RefinedCauseList"
-                )
+                cached = _invoke_structured(structured_refine, refine_prompt, "RefinedCauseList")
                 response_cache[refine_prompt] = cached
             refined_data = dict(cached)
             final_causes: list[dict] = list(refined_data.get("ranked_causes", []) or [])
@@ -433,9 +418,7 @@ def make_explanation_agent(
             formatted_causes = "\n".join(
                 f"- {c.get('cause_description', '')}" for c in final_causes
             )
-            summary_prompt = SUMMARY_PROMPT_TEMPLATE.format(
-                formatted_causes=formatted_causes
-            )
+            summary_prompt = SUMMARY_PROMPT_TEMPLATE.format(formatted_causes=formatted_causes)
             cached_summary = response_cache.get(summary_prompt)
             if cached_summary is None:
                 cached_summary = (llm.invoke(summary_prompt).content or "").strip()

@@ -32,11 +32,15 @@ import type { EventLogDetail, FilterEntry } from "@/lib/api-types";
 import { formatNumber } from "@/lib/format";
 import { getActivityRenameMap } from "@/lib/activity-rename";
 import { cn } from "@/lib/cn";
+import { PROCESS_PAGE_SIZE } from "@/lib/query-keys";
+import { useDebouncedValue } from "@/lib/use-debounced-value";
 
 import { EventsTable } from "./events-table";
 
 const PAGE_SIZES = [25, 50, 100, 200];
-const DEFAULT_PAGE_SIZE = 50;
+// Shared with prefetchProcessTabs (client-prefetch.ts): the prefetched first
+// page must hash to the same query key this tab reads on first render.
+const DEFAULT_PAGE_SIZE = PROCESS_PAGE_SIZE;
 
 export function EventsTab({ logId, log }: { logId: string; log: EventLogDetail }) {
   const activityRenames = useMemo(() => getActivityRenameMap(log), [log]);
@@ -60,17 +64,21 @@ export function EventsTab({ logId, log }: { logId: string; log: EventLogDetail }
   const isDirty = normalizeFilters(filters) !== normalizeFilters(log.active_filter);
   const hasApplied = (log.active_filter?.length ?? 0) > 0;
 
+  // Debounced: the free-text search fans out to a CAST+ILIKE across every
+  // column on the API - per-keystroke requests would full-scan the log.
+  const debouncedQ = useDebouncedValue(q, 300);
+
   const params = useMemo<EventsListParams>(
     () => ({
       offset: page * limit,
       limit,
       sort: sort || undefined,
       filter: filters.length > 0 ? filters : undefined,
-      q: q.trim() || undefined,
+      q: debouncedQ.trim() || undefined,
       missing_only: missingOnly || undefined,
       case_id: caseIdFilter ?? undefined,
     }),
-    [page, limit, sort, filters, q, missingOnly, caseIdFilter],
+    [page, limit, sort, filters, debouncedQ, missingOnly, caseIdFilter],
   );
 
   const { data, isLoading, isError, error, isFetching } = useEventLogRows(logId, params);
