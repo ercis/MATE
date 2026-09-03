@@ -131,7 +131,7 @@ export function Sidebar({ isAdmin = false }: { isAdmin?: boolean }) {
         <MateLogo animateOnHover className="h-7 w-7 shrink-0 text-sidebar-foreground" />
         {!collapsed && (
           <>
-            <span className="truncate text-sm font-semibold tracking-tight">PM-MATE</span>
+            <span className="truncate text-sm font-semibold tracking-tight">MATE</span>
             <button
               type="button"
               onClick={onTogglePin}

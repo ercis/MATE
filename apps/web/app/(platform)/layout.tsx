@@ -58,7 +58,7 @@ export default async function PlatformLayout({
           />
         </div>
         <div className="flex flex-col items-center gap-1 text-center duration-700 animate-in fade-in-0 slide-in-from-bottom-2">
-          <span className="text-lg font-semibold tracking-tight">PM-MATE</span>
+          <span className="text-lg font-semibold tracking-tight">MATE</span>
           <span className="text-xs text-muted-foreground">Caching workspace…</span>
         </div>
         <div className="mt-1 h-0.5 w-40 overflow-hidden rounded-full bg-border">

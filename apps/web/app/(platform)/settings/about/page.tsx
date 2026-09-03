@@ -134,7 +134,7 @@ export default function AboutPage() {
     <div className="space-y-4">
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">About PM-MATE</CardTitle>
+          <CardTitle className="text-base">About MATE</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4 text-sm">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

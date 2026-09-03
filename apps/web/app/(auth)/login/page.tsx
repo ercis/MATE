@@ -50,7 +50,7 @@ export default async function LoginPage({
       <ThemeToggleButton className="absolute right-4 top-4 h-8 w-8 cursor-pointer text-muted-foreground" />
       <div className="space-y-2 text-center">
         <MateLogo className="mx-auto h-11 w-11 text-foreground" />
-        <h1 className="text-2xl font-semibold">PM-MATE</h1>
+        <h1 className="text-2xl font-semibold">MATE</h1>
         <p className="text-sm text-muted-foreground">
           {DEMO_MODE
             ? "Demo mode – signing you in…"

@@ -9,7 +9,7 @@ import "diagram-js-minimap/assets/diagram-js-minimap.css";
 import { Providers } from "@/components/providers";
 
 export const metadata: Metadata = {
-  title: "PM-MATE",
+  title: "MATE",
   description: "Local-first process analysis platform.",
 };
 
