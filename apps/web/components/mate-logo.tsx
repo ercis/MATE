@@ -5,7 +5,7 @@ import { cn } from "@/lib/cn";
  * bottom-right filled). Rendered inline with `currentColor`, so it inherits the
  * surrounding text color — put it on a `text-foreground`/`text-sidebar-foreground`
  * surface and it comes out black on light, white on dark, matching the two
- * source assets in `public/pm-mate-icon-{black,white}.svg`. Shared component
+ * source assets in `public/mate-icon-{black,white}.svg`. Shared component
  * (no "use client"): usable from server and client trees alike.
  *
  * `animated` runs a clockwise "loader" pulse — each tile scales up in turn

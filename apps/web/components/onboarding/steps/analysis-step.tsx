@@ -32,7 +32,7 @@ export function AnalysisStep() {
         <p className="text-sm text-muted-foreground">
           {isLoading || count === 0
             ? "Your analysis modules are installed and switched on — there is nothing to choose here."
-            : `PM-MATE ships with ${count} analysis modules. All of them are installed and switched on for your account — there is nothing to choose here.`}
+            : `MATE ships with ${count} analysis modules. All of them are installed and switched on for your account — there is nothing to choose here.`}
         </p>
       </div>
 
