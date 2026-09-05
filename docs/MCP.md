@@ -10,7 +10,7 @@ The transport is **streamable HTTP** at `/mcp`. Every call acts as exactly one a
 2. Connect (Claude Code shown; other clients below):
 
    ```bash
-   claude mcp add --transport http mate https://pm-mate.uni-muenster.de/mcp \
+   claude mcp add --transport http mate https://mate.uni-muenster.de/mcp \
      --header "Authorization: Bearer mate_pat_…"
    ```
 

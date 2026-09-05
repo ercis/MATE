@@ -1,6 +1,6 @@
 # Mate – on-VM reverse proxy (production).
 #
-# The uni edge proxy forwards pm-mate.uni-muenster.de:80/443 to this VM's :443
+# The uni edge proxy forwards mate.uni-muenster.de:80/443 to this VM's :443
 # as a single HTTPS pipe. This Caddy instance terminates that TLS with the
 # provided Let's Encrypt cert and fans the one origin out to the three
 # app containers by path. See DEPLOY.md for the full picture.
