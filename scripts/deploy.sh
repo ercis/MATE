@@ -41,7 +41,7 @@ SSH_PORT="${DEPLOY_PORT:-22}"
 SSH_USER="$DEPLOY_USER"
 REMOTE_DIR="${DEPLOY_DIR:-~/mate}"
 BRANCH="${DEPLOY_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
-PUBLIC_URL="${DEPLOY_PUBLIC_URL:-https://pm-mate.uni-muenster.de}"
+PUBLIC_URL="${DEPLOY_PUBLIC_URL:-https://mate.uni-muenster.de}"
 
 push=1
 [[ "${1:-}" == "--no-push" ]] && push=0

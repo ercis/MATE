@@ -1,6 +1,6 @@
 # Deploying Mate to the uni VM
 
-Production deployment to `pm-mate.uni-muenster.de`, fronted by the FB4 reverse
+Production deployment to `mate.uni-muenster.de`, fronted by the FB4 reverse
 proxy. For the local-`localhost` setup, see [`README.md`](../README.md) – this
 doc only covers the server. **All VM access needs the FB4-DEV-VPN.**
 
@@ -44,7 +44,7 @@ $DC logs -f proxy keycloak
 
 ```
         Internet
-           │  https://pm-mate.uni-muenster.de  (public cert on the uni proxy)
+           │  https://mate.uni-muenster.de  (public cert on the uni proxy)
            ▼
    ┌──────────────────┐
    │  uni edge proxy  │   forwards :80 and :443  ──►  the VM's :443
@@ -69,7 +69,7 @@ the VM's Let's Encrypt live dir (`$TLS_CERT_DIR`, set in `.env`). The public cer
 proxy↔VM hop, which is why Caddy binds by port and ignores the hostname
 mismatch.
 
-Result: the browser talks to a **single same-origin** `https://pm-mate.uni-muenster.de`,
+Result: the browser talks to a **single same-origin** `https://mate.uni-muenster.de`,
 so the per-port CORS and `/etc/hosts` Keycloak hacks from the local setup are gone.
 
 ## Prerequisites
@@ -119,7 +119,7 @@ docker run --rm -p 443:443 \
   caddy:2-alpine
 ```
 
-From your laptop (outside the uni net): `curl https://pm-mate.uni-muenster.de`.
+From your laptop (outside the uni net): `curl https://mate.uni-muenster.de`.
 Seeing `hello from pm-mate` means the pipe is good. `Ctrl-C` to stop, then
 proceed.
 
@@ -159,13 +159,13 @@ Two things must line up or login fails:
   and writes it to both.
 - **Redirect URI / web origin** – Keycloak only redirects back to URLs that are
   pre-approved. The default is `localhost:3000`; the script adds
-  `https://pm-mate.uni-muenster.de` (keeping localhost, so local dev still
+  `https://mate.uni-muenster.de` (keeping localhost, so local dev still
   works). Without it: "Invalid redirect_uri".
 
 The realm imports from `infra/keycloak/realm-export/flows-funds-realm.json`
 **only on the first boot** (empty Keycloak DB). On a re-deploy the import is
 skipped – change realm settings in the admin console at
-`https://pm-mate.uni-muenster.de/auth/admin` (login = `KEYCLOAK_ADMIN` /
+`https://mate.uni-muenster.de/auth/admin` (login = `KEYCLOAK_ADMIN` /
 `KEYCLOAK_ADMIN_PASSWORD`) instead.
 
 <details>
@@ -173,10 +173,10 @@ skipped – change realm settings in the admin console at
 
 In the `flows-funds-web` client of the realm JSON, before first boot:
 
-- `redirectUris`: add `"https://pm-mate.uni-muenster.de/api/auth/callback/keycloak"`
-- `webOrigins`: add `"https://pm-mate.uni-muenster.de"`
-- `attributes."post.logout.redirect.uris"`: append `##https://pm-mate.uni-muenster.de/login##https://pm-mate.uni-muenster.de/`
-- `rootUrl` / `baseUrl`: set to `https://pm-mate.uni-muenster.de`
+- `redirectUris`: add `"https://mate.uni-muenster.de/api/auth/callback/keycloak"`
+- `webOrigins`: add `"https://mate.uni-muenster.de"`
+- `attributes."post.logout.redirect.uris"`: append `##https://mate.uni-muenster.de/login##https://mate.uni-muenster.de/`
+- `rootUrl` / `baseUrl`: set to `https://mate.uni-muenster.de`
 - `secret`: replace with a fresh value and use the **same** one for `KEYCLOAK_CLIENT_SECRET` in `.env` (§4).
 </details>
 
@@ -188,7 +188,7 @@ Keycloak's own login page:
 1. Register an OIDC client with the university. The redirect URI is Keycloak's
    broker callback, whose last path segment is the IdP **alias** (not the
    protocol):
-   `https://pm-mate.uni-muenster.de/auth/realms/flows-funds/broker/keycloak-oidc/endpoint`
+   `https://mate.uni-muenster.de/auth/realms/flows-funds/broker/keycloak-oidc/endpoint`
    Keep the Keycloak IdP alias equal to that segment (`keycloak-oidc`) so this
    URI never has to be re-registered.
 2. Configure the realm (IdP + redirect + silent first login) on the **running**
@@ -370,15 +370,15 @@ fresh VM. Nothing here is a bug; each is an opt-in or a per-deployment secret.
 
 ```bash
 # 1. Next.js reachable through the proxy
-curl -I https://pm-mate.uni-muenster.de
+curl -I https://mate.uni-muenster.de
 
 # 2. API reachable through the proxy (unauthenticated liveness)
-curl https://pm-mate.uni-muenster.de/health
+curl https://mate.uni-muenster.de/health
 
 # 3. Keycloak issuer is the PUBLIC URL (not `keycloak`/localhost) – if this is
 #    wrong, the OIDC login loop breaks
-curl https://pm-mate.uni-muenster.de/auth/realms/flows-funds/.well-known/openid-configuration | grep '"issuer"'
-#    expect: "issuer":"https://pm-mate.uni-muenster.de/auth/realms/flows-funds"
+curl https://mate.uni-muenster.de/auth/realms/flows-funds/.well-known/openid-configuration | grep '"issuer"'
+#    expect: "issuer":"https://mate.uni-muenster.de/auth/realms/flows-funds"
 ```
 
 Then in a browser:
@@ -424,7 +424,7 @@ make deploy          # or: ./scripts/deploy.sh
 ```
 
 This pushes the current branch, then over SSH does `git reset --hard origin/<branch>`,
-rebuilds, restarts, and health-checks `https://pm-mate.uni-muenster.de/health`.
+rebuilds, restarts, and health-checks `https://mate.uni-muenster.de/health`.
 A cloud GitHub Action can't do this – GitHub's runners aren't on the VPN, so
 they can't reach the VM's SSH port. The deploy clone mirrors git; your secrets
 stay safe in the gitignored `.env` (untouched by the reset). Override the
@@ -497,7 +497,7 @@ In the VM `.env`:
 
 ```dotenv
 MCP_ENABLED=1
-API_BASE_URL=https://pm-mate.uni-muenster.de
+API_BASE_URL=https://mate.uni-muenster.de
 MCP_OAUTH_CLIENT_ID=mate-mcp     # after the OAuth step below; empty = PAT-only
 # optional: MCP_TOOLSETS=…  MCP_READ_ONLY=1  MCP_REQUIRE_EGRESS_CONSENT=0
 ```
@@ -550,7 +550,7 @@ running Keycloak is the real path):
 
 ```bash
 KC_SERVER=http://localhost:8080/auth \
-PUBLIC_BASE_URL=https://pm-mate.uni-muenster.de \
+PUBLIC_BASE_URL=https://mate.uni-muenster.de \
   ./infra/keycloak/configure-mcp-client.sh
 ```
 
@@ -575,17 +575,17 @@ token; PATs never qualify.
 
 ```bash
 # Claude Code – PAT
-claude mcp add --transport http mate https://pm-mate.uni-muenster.de/mcp \
+claude mcp add --transport http mate https://mate.uni-muenster.de/mcp \
   --header "Authorization: Bearer mate_pat_…"
 
 # Claude Code – OAuth: omit the header; Claude Code discovers Keycloak via the
 # 401 resource metadata and opens the browser login (/mcp to authenticate).
-claude mcp add --transport http mate https://pm-mate.uni-muenster.de/mcp
+claude mcp add --transport http mate https://mate.uni-muenster.de/mcp
 
 # Codex CLI (a build with HTTP-server support)
-codex mcp add mate --url https://pm-mate.uni-muenster.de/mcp --bearer-token mate_pat_…
+codex mcp add mate --url https://mate.uni-muenster.de/mcp --bearer-token mate_pat_…
 # Codex without HTTP support – stdio bridge:
-codex mcp add mate -- npx mcp-remote https://pm-mate.uni-muenster.de/mcp \
+codex mcp add mate -- npx mcp-remote https://mate.uni-muenster.de/mcp \
   --header "Authorization: Bearer mate_pat_…"
 ```
 

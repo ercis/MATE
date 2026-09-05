@@ -274,11 +274,11 @@ def test_origin_allowlist() -> None:
     from mate.api import config as cfg
 
     prev = os.environ.get("API_BASE_URL")
-    os.environ["API_BASE_URL"] = "https://pm-mate.uni-muenster.de"
+    os.environ["API_BASE_URL"] = "https://mate.uni-muenster.de"
     cfg.get_settings.cache_clear()
     try:
         assert _origin_allowed("http://localhost:6274") is True  # inspector/dev
-        assert _origin_allowed("https://pm-mate.uni-muenster.de") is True
+        assert _origin_allowed("https://mate.uni-muenster.de") is True
         assert _origin_allowed("https://evil.example.com") is False
     finally:
         if prev is None:

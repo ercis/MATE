@@ -1,6 +1,6 @@
 # Landing page
 
-The public marketing page for [MATE](https://pm-mate.uni-muenster.de), served
+The public marketing page for [MATE](https://mate.uni-muenster.de), served
 from GitHub Pages. One dependency-free `index.html` plus `assets/` - no build
 step, no framework, no tracking.
 

@@ -22,7 +22,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."   # repo root
 
 REALM="infra/keycloak/realm-export/flows-funds-realm.json"
-PUBLIC_URL="${PUBLIC_URL:-https://pm-mate.uni-muenster.de}"
+PUBLIC_URL="${PUBLIC_URL:-https://mate.uni-muenster.de}"
 COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.prod.yml)
 
 start=1
@@ -94,4 +94,4 @@ echo "• Starte Stack – der erste Build kann ~10 Min dauern (cv4cdd zieht Ten
 "${COMPOSE[@]}" up -d --build
 echo
 echo "✔ Läuft. Logs ansehen:  ${COMPOSE[*]} logs -f api"
-echo "  Prüfen:              curl https://pm-mate.uni-muenster.de/health"
+echo "  Prüfen:              curl https://mate.uni-muenster.de/health"

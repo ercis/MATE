@@ -37,7 +37,7 @@
 #
 # Usage (uni VM – Keycloak lives under /auth there):
 #   KC_SERVER=http://localhost:8080/auth \
-#   PUBLIC_BASE_URL=https://pm-mate.uni-muenster.de \
+#   PUBLIC_BASE_URL=https://mate.uni-muenster.de \
 #     ./infra/keycloak/configure-mcp-client.sh
 #
 set -euo pipefail
@@ -47,7 +47,7 @@ KC_CONTAINER="${KC_CONTAINER:-mate-keycloak}"
 REALM="${REALM:-flows-funds}"
 # The OAuth client id. Must match MCP_OAUTH_CLIENT_ID in the VM .env.
 MCP_CLIENT_ID="${MCP_CLIENT_ID:-mate-mcp}"
-# Public origin of the deployment (e.g. https://pm-mate.uni-muenster.de).
+# Public origin of the deployment (e.g. https://mate.uni-muenster.de).
 # When set, "${PUBLIC_BASE_URL}/*" is added to the redirect URIs so browser-
 # based clients hosted on the app origin can complete the flow.
 PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-}"
