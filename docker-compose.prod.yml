@@ -53,6 +53,8 @@ services:
       - "443:443"
     volumes:
       - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Served at the site root by the @landing route in the Caddyfile.
+      - ./landing:/srv/landing:ro
       # Mount the whole letsencrypt dir, not just live/: live/ is symlinks
       # into archive/, so a narrower mount breaks the cert chain.
       - /etc/letsencrypt:/etc/letsencrypt:ro
@@ -91,7 +93,8 @@ services:
       # single-use code ("Code not valid"). The proxy service carries a docker
       # network alias for the public hostname (see below), so these calls
       # resolve to our Caddy on the internal network instead. Caddy serves the
-      # pm-mate-vm cert (name mismatch for pm-mate) → skip verify on this hop.
+      # pm-mate-vm cert (the VM's own name, so a mismatch for mate) → skip
+      # verify on this hop.
       #
       # Staged replacement for the line below (see auth.ts KEYCLOAK_INTERNAL_URL):
       # route the server-side OIDC back-channel straight to Keycloak over the
